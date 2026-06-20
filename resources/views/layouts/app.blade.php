@@ -7,15 +7,52 @@
 
         <title>{{ config('app.name', 'Laravel') }}</title>
 
-        <!-- Fonts -->
-        <link rel="preconnect" href="https://fonts.bunny.net">
-        <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
+        <script>
+            (function() {
+                const saved = localStorage.getItem('theme');
+                const isDark = saved === null ? true : saved === 'dark';
+                if (isDark) {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
+                window.__initialDarkMode = isDark;
+            })();
+        </script>
+
+        <!-- Fonts & Icons -->
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
         <!-- Scripts -->
         @vite(['resources/css/app.css', 'resources/js/app.js'])
+
+        <style>
+            body { font-family: 'Plus Jakarta Sans', sans-serif; }
+            [x-cloak] { display: none !important; }
+        </style>
+
+        <script>
+            document.addEventListener('alpine:init', () => {
+                Alpine.store('theme', {
+                    dark: window.__initialDarkMode,
+                    toggle() {
+                        this.dark = !this.dark;
+                        localStorage.setItem('theme', this.dark ? 'dark' : 'light');
+                        if (this.dark) {
+                            document.documentElement.classList.add('dark');
+                        } else {
+                            document.documentElement.classList.remove('dark');
+                        }
+                    }
+                });
+            });
+        </script>
     </head>
-    <body class="font-sans antialiased bg-slate-950 text-slate-100">
-        <div class="min-h-screen bg-slate-950">
+    <body class="bg-lightBg dark:bg-darkBg text-slate-900 dark:text-slate-100 transition-colors duration-300 antialiased" x-data="{ rightSidebar: false }">
+        <div class="min-h-screen bg-lightBg dark:bg-[#0b1120]">
             @include('layouts.navigation')
 
             <!-- Page Heading -->
