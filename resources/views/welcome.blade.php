@@ -142,7 +142,7 @@
         </section>
 
         <!-- Dynamic Featured Auctions (If Any) -->
-        @if(isset($featuredAuctions) && count($featuredAuctions) > 0)
+        @if(isset($featuredLots) && count($featuredLots) > 0)
             <section class="py-12 sm:py-20">
                 <div class="max-w-7xl mx-auto px-4">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-12">
@@ -157,14 +157,14 @@
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                        @foreach($featuredAuctions as $auction)
+                        @foreach($featuredLots as $lot)
+                            @php $event = $lot->auction; @endphp
                             <div class="flex flex-col rounded-2xl bg-white dark:bg-[#0b1120] border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden group transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl">
                                 <div class="p-6 flex-1 flex flex-col justify-between">
                                     <div>
-                                        <!-- Platform Badge -->
                                         <div class="flex items-center justify-between mb-4">
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold {{ $auction->platform === 'bstock' ? 'bg-primary/20 text-slate-850 dark:text-primary border border-primary/25' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/25' }}">
-                                                {{ strtoupper($auction->platform) }}
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold {{ $event->platform === 'bstock' ? 'bg-primary/20 text-slate-850 dark:text-primary border border-primary/25' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/25' }}">
+                                                {{ strtoupper($event->platform) }}
                                             </span>
                                             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-450 border border-emerald-500/25">
                                                 <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span>
@@ -173,7 +173,7 @@
                                         </div>
 
                                         <h3 class="text-lg font-bold text-slate-900 dark:text-white leading-snug group-hover:text-primary transition-colors duration-250">
-                                            <a href="{{ route('auctions.show', $auction->id) }}">{{ $auction->title }}</a>
+                                            <a href="{{ route('auctions.show', $lot->id) }}">{{ $lot->title }}</a>
                                         </h3>
                                     </div>
 
@@ -181,19 +181,19 @@
                                         <div class="grid grid-cols-2 gap-4 mb-4">
                                             <div>
                                                 <span class="block text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Current Bid</span>
-                                                <span class="text-lg font-bold text-slate-900 dark:text-white">${{ number_format($auction->current_bid, 2) }}</span>
+                                                <span class="text-lg font-bold text-slate-900 dark:text-white">${{ number_format($lot->current_bid, 2) }}</span>
                                             </div>
                                             <div>
                                                 <span class="block text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Min Increment</span>
-                                                <span class="text-sm font-semibold text-slate-600 dark:text-slate-400">+${{ number_format($auction->bid_increment, 2) }}</span>
+                                                <span class="text-sm font-semibold text-slate-600 dark:text-slate-400">+${{ number_format($lot->bid_increment, 2) }}</span>
                                             </div>
                                         </div>
                                         <div class="flex items-center justify-between">
                                             <div class="flex items-center text-xs text-slate-500 dark:text-slate-400">
                                                 <i class="fa-solid fa-clock mr-1.5 opacity-70"></i>
-                                                <span>Ends in: <strong class="text-slate-700 dark:text-white">{{ $auction->time_remaining }}</strong></span>
+                                                <span>Ends in: <strong class="text-slate-700 dark:text-white">{{ $lot->time_remaining }}</strong></span>
                                             </div>
-                                            <a href="{{ route('auctions.show', $auction->id) }}" class="inline-flex justify-center items-center px-4 py-2 text-xs font-bold text-slate-900 bg-primary hover:bg-primary/90 rounded-lg transition-colors shadow-md shadow-primary/20">
+                                            <a href="{{ route('auctions.show', $lot->id) }}" class="inline-flex justify-center items-center px-4 py-2 text-xs font-bold text-slate-900 bg-primary hover:bg-primary/90 rounded-lg transition-colors shadow-md shadow-primary/20">
                                                 Bid Now
                                             </a>
                                         </div>

@@ -9,13 +9,13 @@ use Illuminate\Support\Facades\Route;
 
 // Public Homepage
 Route::get('/', function () {
-    // Fetch featured active auctions for homepage cards
-    $featuredAuctions = \App\Models\Auction::where('is_active', true)
-        ->where('is_featured', true)
+    $featuredLots = \App\Models\AuctionLot::with('auction')
+        ->where('is_active', true)
+        ->whereHas('auction', fn ($q) => $q->where('is_featured', true))
         ->latest()
         ->take(4)
         ->get();
-    return view('welcome', compact('featuredAuctions'));
+    return view('welcome', compact('featuredLots'));
 });
 
 // Marketplace / Browsing (Guest readable)
@@ -54,7 +54,7 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
 
     // Auctions CRUD
-    Route::resource('auctions', AdminAuctionController::class)->except(['show']);
+    Route::resource('auctions', AdminAuctionController::class);
     Route::post('auctions/{id}/sync', [AdminAuctionController::class, 'syncSingle'])->name('auctions.sync');
 
     // Platform Credentials CRUD

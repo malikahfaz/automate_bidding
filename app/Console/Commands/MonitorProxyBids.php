@@ -64,8 +64,12 @@ class MonitorProxyBids extends Command
         }
 
         foreach ($proxies as $proxy) {
-            $this->line("Dispatching IvaluaProxyBidJob for Auction ID: {$proxy->auction_id}");
-            IvaluaProxyBidJob::dispatch($proxy->auction_id);
+            $lotId = $proxy->auction_lot_id;
+            if (!$lotId) {
+                continue;
+            }
+            $this->line("Dispatching IvaluaProxyBidJob for Lot ID: {$lotId}");
+            IvaluaProxyBidJob::dispatch($lotId);
         }
     }
 }

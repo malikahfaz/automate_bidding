@@ -9,6 +9,7 @@ class ProxyBid extends Model
 {
     protected $fillable = [
         'auction_id',
+        'auction_lot_id',
         'user_id',
         'max_amount',
         'current_auto_bid',
@@ -25,17 +26,16 @@ class ProxyBid extends Model
         'stopped_at' => 'datetime',
     ];
 
-    /**
-     * Get the auction.
-     */
     public function auction(): BelongsTo
     {
         return $this->belongsTo(Auction::class);
     }
 
-    /**
-     * Get the user.
-     */
+    public function lot(): BelongsTo
+    {
+        return $this->belongsTo(AuctionLot::class, 'auction_lot_id');
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

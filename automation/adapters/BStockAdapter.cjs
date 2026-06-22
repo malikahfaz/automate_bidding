@@ -2,9 +2,10 @@ const fs = require('fs');
 const path = require('path');
 
 class BStockAdapter {
-    constructor(page, cookiesPath) {
+    constructor(page, cookiesPath, options = {}) {
         this.page = page;
         this.cookiesPath = cookiesPath;
+        this.mockMode = options.mockMode === true;
 
         // Configurable Selectors (easy to update)
         this.selectors = {
@@ -61,8 +62,7 @@ class BStockAdapter {
     async login(email, password) {
         console.log(`[B-Stock] Logging in with account: ${email}`);
         
-        // Check if we are running in a mock/test target
-        if (email.includes('example.com') || email.includes('ellectmobility.com')) {
+        if (this.mockMode) {
             console.log('[B-Stock] Running in Mock Mode - Simulating login success.');
             // Write a dummy cookie file
             fs.mkdirSync(path.dirname(this.cookiesPath), { recursive: true });
@@ -94,8 +94,7 @@ class BStockAdapter {
     async readAuctionState(url) {
         console.log(`[B-Stock] Reading state for: ${url}`);
 
-        // Mock mode detection for client demo
-        if (url.includes('ellectmobility.com') || url.includes('mock')) {
+        if (this.mockMode) {
             console.log('[B-Stock] Mock Mode - Returning simulated auction state.');
             const isS4Ultra = url.includes('id=4520');
             const baseBid = isS4Ultra ? 12100.00 : 3400.00;
@@ -139,7 +138,7 @@ class BStockAdapter {
     async placeBid(url, amount) {
         console.log(`[B-Stock] Placing bid of ${amount} on ${url}`);
 
-        if (url.includes('ellectmobility.com') || url.includes('mock')) {
+        if (this.mockMode) {
             console.log('[B-Stock] Mock Mode - Simulating successful bid placement.');
             return {
                 success: true,

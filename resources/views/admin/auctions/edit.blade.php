@@ -38,6 +38,12 @@
                 @enderror
             </div>
 
+            <div>
+                <label for="external_lot_id" class="block text-xs font-medium text-slate-400 mb-2">Ivalua Lot ID</label>
+                <input type="text" name="external_lot_id" id="external_lot_id" placeholder="e.g. AETA991030" value="{{ old('external_lot_id', $auction->external_lot_id) }}"
+                    class="w-full rounded-xl bg-slate-950 border-slate-800 focus:border-blue-500 focus:ring-blue-500 text-sm text-slate-200 py-3 pl-4">
+            </div>
+
             <!-- Title -->
             <div>
                 <label for="title" class="block text-xs font-medium text-slate-400 mb-2">Auction Title</label>

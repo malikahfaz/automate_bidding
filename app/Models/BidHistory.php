@@ -9,6 +9,7 @@ class BidHistory extends Model
 {
     protected $fillable = [
         'auction_id',
+        'auction_lot_id',
         'user_id',
         'bid_id',
         'amount',
@@ -26,6 +27,11 @@ class BidHistory extends Model
     public function auction(): BelongsTo
     {
         return $this->belongsTo(Auction::class);
+    }
+
+    public function lot(): BelongsTo
+    {
+        return $this->belongsTo(AuctionLot::class, 'auction_lot_id');
     }
 
     /**

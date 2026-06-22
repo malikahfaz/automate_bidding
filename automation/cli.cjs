@@ -9,12 +9,14 @@ const IvaluaAdapter = require('./adapters/IvaluaAdapter.cjs');
 async function main() {
     const argv = parseArgs(process.argv.slice(2));
 
+    const mockMode = argv.mock === true || argv.mock === 'true' || argv.mock === '1';
     const action = argv.action; // login, sync, place-bid
     const platform = argv.platform; // bstock, ivalua
     const email = argv.email;
     const password = argv.password;
     const url = argv.url;
     const amount = argv.amount ? parseFloat(argv.amount) : null;
+    const lotId = argv['lot-id'] || null;
     const cookiesPath = argv['cookies-path'] || path.join(__dirname, '..', 'storage', 'app', 'automation', `cookies_${platform}.json`);
     const screenshotPath = argv['screenshot-path'] || path.join(__dirname, '..', 'storage', 'app', 'automation', 'screenshots', `${platform}_${Date.now()}.png`);
 
@@ -50,9 +52,9 @@ async function main() {
 
         // Initialize adapter
         if (platform === 'bstock') {
-            adapter = new BStockAdapter(page, cookiesPath);
+            adapter = new BStockAdapter(page, cookiesPath, { mockMode });
         } else if (platform === 'ivalua') {
-            adapter = new IvaluaAdapter(page, cookiesPath);
+            adapter = new IvaluaAdapter(page, cookiesPath, { mockMode });
         } else {
             throw new Error(`Unsupported platform: ${platform}`);
         }
@@ -73,7 +75,31 @@ async function main() {
             if (email && password) {
                 await adapter.ensureSession(email, password);
             }
-            resultData = await adapter.readAuctionState(url);
+            resultData = await adapter.readAuctionState(url, lotId);
+        } else if (action === 'bulk-sync') {
+            if (!email || !password) {
+                throw new Error('Email and password required for bulk-sync action');
+            }
+            const payloadPath = argv['payload-path'];
+            if (!payloadPath || !fs.existsSync(payloadPath)) {
+                throw new Error('payload-path required for bulk-sync action');
+            }
+            const payload = JSON.parse(fs.readFileSync(payloadPath, 'utf8'));
+            await adapter.ensureSession(email, password);
+            resultData = await adapter.bulkSyncConsoles(payload.consoles || []);
+        } else if (action === 'import-catalog') {
+            if (!email || !password) {
+                throw new Error('Email and password required for import-catalog action');
+            }
+            await adapter.ensureSession(email, password);
+            const limitConsoles = argv['limit-consoles'] !== undefined ? parseInt(argv['limit-consoles'], 10) : 0;
+            resultData = await adapter.listCatalog({ limitConsoles });
+        } else if (action === 'list-browse-events') {
+            if (!email || !password) {
+                throw new Error('Email and password required for list-browse-events action');
+            }
+            await adapter.ensureSession(email, password);
+            resultData = await adapter.listBrowseEventsOnly();
         } else if (action === 'place-bid') {
             if (!url || !amount) {
                 throw new Error('URL and amount required for place-bid action');
@@ -82,7 +108,7 @@ async function main() {
                 throw new Error('Email and password required for place-bid action');
             }
             await adapter.ensureSession(email, password);
-            resultData = await adapter.placeBid(url, amount);
+            resultData = await adapter.placeBid(url, amount, lotId, password);
         } else {
             throw new Error(`Unsupported action: ${action}`);
         }

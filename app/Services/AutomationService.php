@@ -47,6 +47,8 @@ class AutomationService
             mkdir(dirname($screenshotPath), 0755, true);
         }
 
+        $mockMode = (bool) config('automation.mock_mode', false);
+
         // 3. Build command line
         $cmd = [
             'node',
@@ -69,9 +71,47 @@ class AutomationService
             $cmd[] = (string)$args['amount'];
         }
 
+        if (!empty($args['lot_id'])) {
+            $cmd[] = '--lot-id';
+            $cmd[] = (string)$args['lot_id'];
+        }
+
+        if (array_key_exists('limit_consoles', $args)) {
+            $cmd[] = '--limit-consoles';
+            $cmd[] = (string) $args['limit_consoles'];
+        }
+
+        $payloadPath = null;
+        if (!empty($args['consoles'])) {
+            $payloadPath = storage_path('app/automation/payload_' . uniqid() . '.json');
+            if (!file_exists(dirname($payloadPath))) {
+                mkdir(dirname($payloadPath), 0755, true);
+            }
+            file_put_contents($payloadPath, json_encode(['consoles' => $args['consoles']]));
+            $cmd[] = '--payload-path';
+            $cmd[] = $payloadPath;
+        }
+
+        if ($mockMode) {
+            $cmd[] = '--mock';
+            $cmd[] = 'true';
+        }
+
+        if (isset($args['mock']) && $args['mock']) {
+            $cmd[] = '--mock';
+            $cmd[] = 'true';
+        }
+
         // 4. Run Process
         $process = new Process($cmd);
-        $process->setTimeout(90); // 90 seconds timeout
+        $process->setTimeout(match ($action) {
+            'bulk-sync' => 300,
+            'import-catalog' => 600,
+            'list-browse-events' => 120,
+            'place-bid' => 180,
+            'sync' => 120,
+            default => 90,
+        });
         
         $auctionId = $args['auction_id'] ?? null;
         $userId = $args['user_id'] ?? null;
@@ -182,6 +222,10 @@ class AutomationService
             ]);
 
             throw $e;
+        } finally {
+            if (!empty($payloadPath) && file_exists($payloadPath)) {
+                @unlink($payloadPath);
+            }
         }
     }
 }

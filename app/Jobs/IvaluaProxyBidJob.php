@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Models\Auction;
+use App\Models\AuctionLot;
 use App\Models\Bid;
 use App\Models\BidHistory;
 use App\Models\ProxyBid;
@@ -21,28 +21,23 @@ class IvaluaProxyBidJob implements ShouldQueue
 
     public $tries = 1;
 
-    protected $auctionId;
+    protected $auctionLotId;
 
-    /**
-     * Create a new job instance.
-     */
-    public function __construct(int $auctionId)
+    public function __construct(int $auctionLotId)
     {
-        $this->auctionId = $auctionId;
+        $this->auctionLotId = $auctionLotId;
     }
 
-    /**
-     * Execute the job.
-     */
     public function handle(AutomationService $automation): void
     {
-        $auction = Auction::find($this->auctionId);
-        if (!$auction || !$auction->is_active || $auction->status !== 'active') {
+        $lot = AuctionLot::with('auction')->find($this->auctionLotId);
+        $auction = $lot?->auction;
+
+        if (!$lot || !$auction || !$lot->is_active || $lot->status !== 'active') {
             return;
         }
 
-        // Get the active proxy bid for this auction
-        $proxyBid = ProxyBid::where('auction_id', $this->auctionId)
+        $proxyBid = ProxyBid::where('auction_lot_id', $this->auctionLotId)
             ->where('status', 'active')
             ->first();
 
@@ -50,77 +45,71 @@ class IvaluaProxyBidJob implements ShouldQueue
             return;
         }
 
-        // Lock to avoid race conditions in proxy bidding check
-        $lockKey = "proxy_lock_{$auction->id}";
+        $lockKey = "proxy_lock_{$lot->id}";
         $lock = Cache::lock($lockKey, 30);
 
         if (!$lock->get()) {
-            return; // Exit, another proxy check is running
+            return;
         }
 
-        Log::info("Running Ivalua Proxy Bidding check for Auction: {$auction->id}, User: {$proxyBid->user_id}");
+        Log::info("Running Ivalua Proxy Bidding check for Lot: {$lot->id}, User: {$proxyBid->user_id}");
 
         try {
-            // 1. Sync latest auction state
             $syncData = $automation->runCommand('sync', 'ivalua', [
                 'url' => $auction->external_url,
-                'auction_id' => $auction->id
+                'lot_id' => $lot->external_lot_id,
+                'auction_id' => $auction->id,
+                'auction_lot_id' => $lot->id,
             ]);
 
-            $oldBid = $auction->current_bid;
-            $currentBid = $syncData['current_bid'] ?? $auction->current_bid;
-            $increment = $syncData['bid_increment'] ?? $auction->bid_increment;
-            $timeRemaining = $syncData['time_remaining'] ?? $auction->time_remaining;
-            $status = $syncData['status'] ?? $auction->status;
+            $oldBid = $lot->current_bid;
+            $currentBid = $syncData['current_bid'] ?? $lot->current_bid;
+            $increment = $syncData['bid_increment'] ?? $lot->bid_increment;
+            $timeRemaining = $syncData['time_remaining'] ?? $lot->time_remaining;
+            $status = $syncData['status'] ?? $lot->status;
 
-            // Update local state
-            $auction->update([
+            $lot->update([
                 'current_bid' => $currentBid,
                 'bid_increment' => $increment,
                 'time_remaining' => $timeRemaining,
                 'status' => $status,
                 'last_synced_at' => now(),
-                'last_sync_error' => null
+                'last_sync_error' => null,
             ]);
 
-            // Save history if external bid changed
             if ($currentBid > $oldBid) {
-                $exists = BidHistory::where('auction_id', $auction->id)->where('amount', $currentBid)->exists();
+                $exists = BidHistory::where('auction_lot_id', $lot->id)->where('amount', $currentBid)->exists();
                 if (!$exists) {
                     BidHistory::create([
                         'auction_id' => $auction->id,
+                        'auction_lot_id' => $lot->id,
                         'amount' => $currentBid,
                         'source' => 'external',
-                        'status' => 'successful'
+                        'status' => 'successful',
                     ]);
                 }
             }
 
-            // Check if auction has ended
             if ($status === 'ended' || $status === 'failed') {
                 $proxyBid->update([
                     'status' => 'completed',
                     'stopped_at' => now(),
-                    'stop_reason' => 'Auction ended.'
+                    'stop_reason' => 'Auction ended.',
                 ]);
                 return;
             }
 
-            // 2. Check if we are winning
-            // We look at our system's last placed successful bid for this auction.
-            // If the latest bid on the platform equals our successful bid, we are winning.
-            $lastSuccessBid = BidHistory::where('auction_id', $auction->id)
+            $lastSuccessBid = BidHistory::where('auction_lot_id', $lot->id)
                 ->where('source', 'user')
                 ->where('status', 'successful')
                 ->orderBy('amount', 'desc')
                 ->first();
 
             if ($lastSuccessBid && $currentBid <= $lastSuccessBid->amount) {
-                Log::info("System is currently winning the auction {$auction->id} (Current bid: {$currentBid}, Our bid: {$lastSuccessBid->amount}). No bid needed.");
+                Log::info("System is currently winning lot {$lot->id} (Current bid: {$currentBid}, Our bid: {$lastSuccessBid->amount}). No bid needed.");
                 return;
             }
 
-            // 3. We are outbid! Calculate next bid
             $nextBid = $currentBid + $increment;
 
             if ($nextBid > $proxyBid->max_amount) {
@@ -128,88 +117,92 @@ class IvaluaProxyBidJob implements ShouldQueue
                 $proxyBid->update([
                     'status' => 'stopped',
                     'stopped_at' => now(),
-                    'stop_reason' => 'Max bid amount reached.'
+                    'stop_reason' => 'Max bid amount reached.',
                 ]);
 
-                // Create a proxy bid record indicating limit reached
                 Bid::create([
                     'auction_id' => $auction->id,
+                    'auction_lot_id' => $lot->id,
                     'user_id' => $proxyBid->user_id,
                     'bid_type' => 'proxy',
                     'amount' => $proxyBid->max_amount,
                     'status' => 'max_reached',
                     'failure_reason' => "Required bid {$nextBid} exceeds max amount.",
-                    'processed_at' => now()
+                    'processed_at' => now(),
                 ]);
                 return;
             }
 
-            // 4. Place next bid
             Log::info("Proxy placing bid of {$nextBid} (Max limit: {$proxyBid->max_amount})");
 
             $bid = Bid::create([
                 'auction_id' => $auction->id,
+                'auction_lot_id' => $lot->id,
                 'user_id' => $proxyBid->user_id,
                 'bid_type' => 'proxy',
                 'amount' => $nextBid,
                 'max_amount' => $proxyBid->max_amount,
-                'status' => 'processing'
+                'status' => 'processing',
             ]);
 
             try {
                 $result = $automation->runCommand('place-bid', 'ivalua', [
                     'url' => $auction->external_url,
                     'amount' => $nextBid,
+                    'lot_id' => $lot->external_lot_id,
                     'auction_id' => $auction->id,
-                    'user_id' => $proxyBid->user_id
+                    'auction_lot_id' => $lot->id,
+                    'user_id' => $proxyBid->user_id,
                 ]);
 
                 $bid->update([
                     'status' => 'successful',
                     'external_response' => $result,
-                    'processed_at' => now()
+                    'processed_at' => now(),
                 ]);
 
                 $proxyBid->update([
-                    'current_auto_bid' => $nextBid
+                    'current_auto_bid' => $nextBid,
                 ]);
 
-                $auction->update([
-                    'current_bid' => $nextBid
+                $lot->update([
+                    'current_bid' => $nextBid,
                 ]);
 
                 BidHistory::create([
                     'auction_id' => $auction->id,
+                    'auction_lot_id' => $lot->id,
                     'user_id' => $proxyBid->user_id,
                     'bid_id' => $bid->id,
                     'amount' => $nextBid,
                     'source' => 'user',
-                    'status' => 'successful'
+                    'status' => 'successful',
                 ]);
 
                 Log::info("Proxy bid {$bid->id} of amount {$nextBid} placed successfully.");
 
             } catch (\Exception $bidEx) {
                 Log::error("Proxy bid placement failed for bid ID {$bid->id}: " . $bidEx->getMessage());
-                
+
                 $bid->update([
                     'status' => 'failed',
                     'failure_reason' => $bidEx->getMessage(),
-                    'processed_at' => now()
+                    'processed_at' => now(),
                 ]);
 
                 BidHistory::create([
                     'auction_id' => $auction->id,
+                    'auction_lot_id' => $lot->id,
                     'user_id' => $proxyBid->user_id,
                     'bid_id' => $bid->id,
                     'amount' => $nextBid,
                     'source' => 'user',
-                    'status' => 'failed'
+                    'status' => 'failed',
                 ]);
             }
 
         } catch (\Exception $e) {
-            Log::error("Error in IvaluaProxyBidJob for auction {$this->auctionId}: " . $e->getMessage());
+            Log::error("Error in IvaluaProxyBidJob for lot {$this->auctionLotId}: " . $e->getMessage());
         } finally {
             $lock->release();
         }

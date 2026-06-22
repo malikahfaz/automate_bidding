@@ -37,6 +37,14 @@
                 @enderror
             </div>
 
+            <!-- Ivalua Lot ID -->
+            <div>
+                <label for="external_lot_id" class="block text-xs font-medium text-slate-400 mb-2">Ivalua Lot ID (required for Ivalua)</label>
+                <input type="text" name="external_lot_id" id="external_lot_id" placeholder="e.g. AETA991030" value="{{ old('external_lot_id') }}"
+                    class="w-full rounded-xl bg-slate-950 border-slate-800 focus:border-blue-500 focus:ring-blue-500 text-sm text-slate-200 py-3 pl-4">
+                <p class="mt-1 text-[10px] text-slate-500">For T-Mobile Ivalua: use auction_console URL + lot ID from the table.</p>
+            </div>
+
             <!-- Manual Title (Optional) -->
             <div>
                 <label for="title" class="block text-xs font-medium text-slate-400 mb-2">Auction Title (Optional)</label>

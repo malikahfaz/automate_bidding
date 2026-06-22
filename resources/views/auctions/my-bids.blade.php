@@ -27,18 +27,21 @@
                                 @forelse($bids as $bid)
                                     <tr>
                                         <td class="py-4 pl-4 font-semibold text-white">
-                                            @if($bid->auction)
-                                                <a href="{{ route('auctions.show', $bid->auction_id) }}" class="hover:text-blue-400 transition-colors">
-                                                    {{ $bid->auction->title }}
+                                            @if($bid->lot)
+                                                <a href="{{ route('auctions.show', $bid->auction_lot_id) }}" class="hover:text-blue-400 transition-colors">
+                                                    {{ $bid->lot->title }}
                                                 </a>
+                                            @elseif($bid->auction)
+                                                <span class="text-slate-400">{{ $bid->auction->title }}</span>
                                             @else
-                                                <span class="text-slate-500">Deleted Auction</span>
+                                                <span class="text-slate-500">Deleted Lot</span>
                                             @endif
                                         </td>
                                         <td class="py-4">
-                                            @if($bid->auction)
-                                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium {{ $bid->auction->platform === 'bstock' ? 'bg-blue-500/10 text-blue-400' : 'bg-indigo-500/10 text-indigo-400' }}">
-                                                    {{ strtoupper($bid->auction->platform) }}
+                                            @if($bid->lot?->auction ?? $bid->auction)
+                                                @php $platform = $bid->lot?->auction?->platform ?? $bid->auction?->platform; @endphp
+                                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium {{ $platform === 'bstock' ? 'bg-blue-500/10 text-blue-400' : 'bg-indigo-500/10 text-indigo-400' }}">
+                                                    {{ strtoupper($platform) }}
                                                 </span>
                                             @else
                                                 -
@@ -73,8 +76,8 @@
                                             {{ $bid->created_at->format('M d, Y h:i A') }}
                                         </td>
                                         <td class="py-4 pr-4 text-right">
-                                            @if($bid->auction)
-                                                <a href="{{ route('auctions.show', $bid->auction_id) }}" class="text-xs font-semibold text-blue-400 hover:text-blue-300">
+                                            @if($bid->auction_lot_id)
+                                                <a href="{{ route('auctions.show', $bid->auction_lot_id) }}" class="text-xs font-semibold text-blue-400 hover:text-blue-300">
                                                     View Live
                                                 </a>
                                             @endif

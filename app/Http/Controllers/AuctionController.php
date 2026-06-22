@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Auction;
+use App\Models\AuctionLot;
 use App\Models\Bid;
 use App\Models\ProxyBid;
 use App\Models\BidHistory;
@@ -10,36 +10,30 @@ use App\Jobs\PlaceBidJob;
 use App\Jobs\IvaluaProxyBidJob;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
 
 class AuctionController extends Controller
 {
-    /**
-     * Display a listing of auctions (Marketplace).
-     */
     public function index(Request $request)
     {
-        $query = Auction::query();
+        $query = AuctionLot::with('auction');
 
-        // Search title
         if ($request->filled('search')) {
-            $query->where('title', 'like', '%' . $request->search . '%');
+            $query->where(function ($q) use ($request) {
+                $q->where('title', 'like', '%' . $request->search . '%')
+                    ->orWhere('external_lot_id', 'like', '%' . $request->search . '%');
+            });
         }
 
-        // Filter platform
         if ($request->filled('platform') && $request->platform !== 'all') {
-            $query->where('platform', $request->platform);
+            $query->whereHas('auction', fn ($q) => $q->where('platform', $request->platform));
         }
 
-        // Filter status
         if ($request->filled('status') && $request->status !== 'all') {
             $query->where('status', $request->status);
         } else {
-            // Default show active
             $query->where('is_active', true);
         }
 
-        // Sort options
         $sort = $request->get('sort', 'ending_soon');
         if ($sort === 'ending_soon') {
             $query->orderBy('ends_at', 'asc');
@@ -51,84 +45,78 @@ class AuctionController extends Controller
             $query->orderBy('created_at', 'desc');
         }
 
-        $auctions = $query->paginate(12)->withQueryString();
+        $lots = $query->paginate(12)->withQueryString();
 
-        return view('auctions.index', compact('auctions'));
+        return view('auctions.index', compact('lots'));
     }
 
-    /**
-     * Display the specified auction.
-     */
     public function show($id)
     {
-        $auction = Auction::with(['bidHistories.user', 'bids.user', 'activeProxyBid' => function ($q) {
-            $q->where('user_id', Auth::id());
-        }])->findOrFail($id);
+        $lot = AuctionLot::with([
+            'auction',
+            'bidHistories.user',
+            'bids.user',
+            'activeProxyBid' => function ($q) {
+                $q->where('user_id', Auth::id());
+            },
+        ])->findOrFail($id);
 
-        return view('auctions.show', compact('auction'));
+        return view('auctions.show', compact('lot'));
     }
 
-    /**
-     * Submit a normal bid to the queue.
-     */
     public function placeBid(Request $request, $id)
     {
-        $auction = Auction::findOrFail($id);
+        $lot = AuctionLot::with('auction')->findOrFail($id);
+        $auction = $lot->auction;
 
-        if (!$auction->is_active || $auction->status !== 'active') {
-            return back()->with('error', 'This auction is no longer active.');
+        if (!$lot->is_active || $lot->status !== 'active') {
+            return back()->with('error', 'This lot is no longer active.');
         }
 
-        // Validate bid amount
-        $minBid = $auction->current_bid + $auction->bid_increment;
-        
+        $minBid = $lot->current_bid + $lot->bid_increment;
+
         $request->validate([
             'amount' => 'required|numeric|min:' . $minBid,
         ], [
             'amount.min' => 'Your bid must be at least ' . number_format($minBid, 2) . ' (Current bid + bid increment).',
         ]);
 
-        // Check if there's already a pending or processing bid job for this auction
-        // to prevent duplicate executions.
-        $hasPending = Bid::where('auction_id', $auction->id)
+        $hasPending = Bid::where('auction_lot_id', $lot->id)
             ->whereIn('status', ['pending', 'processing'])
             ->exists();
 
         if ($hasPending) {
-            return back()->with('error', 'A bid is currently being processed for this auction. Please wait a few seconds and try again.');
+            return back()->with('error', 'A bid is currently being processed for this lot. Please wait a few seconds and try again.');
         }
 
-        // Create Bid Record
         $bid = Bid::create([
             'auction_id' => $auction->id,
+            'auction_lot_id' => $lot->id,
             'user_id' => Auth::id(),
             'bid_type' => 'normal',
             'amount' => $request->amount,
-            'status' => 'pending'
+            'status' => 'pending',
         ]);
 
-        // Dispatch Bid Execution Job
         PlaceBidJob::dispatch($bid->id);
 
-        return back()->with('success', 'Your bid has been submitted to the execution queue. It will be placed shortly!');
+        return back()->with('success', 'Your bid is queued — it will be placed automatically on Ivalua within a few seconds.');
     }
 
-    /**
-     * Enable custom proxy bidding for Ivalua.
-     */
     public function setProxyBid(Request $request, $id)
     {
-        $auction = Auction::findOrFail($id);
+        $lot = AuctionLot::with('auction')->findOrFail($id);
+        $auction = $lot->auction;
 
         if ($auction->platform !== 'ivalua') {
             return back()->with('error', 'Custom proxy bidding is only supported on Ivalua auctions.');
         }
 
-        if (!$auction->is_active || $auction->status !== 'active') {
-            return back()->with('error', 'This auction is no longer active.');
+        if (!$lot->is_active || $lot->status !== 'active') {
+            return back()->with('error', 'This lot is no longer active.');
         }
 
-        $minBid = $auction->current_bid + $auction->bid_increment;
+        $minBid = $lot->current_bid + $lot->bid_increment;
 
         $request->validate([
             'max_amount' => 'required|numeric|min:' . $minBid,
@@ -136,38 +124,35 @@ class AuctionController extends Controller
             'max_amount.min' => 'Max bid must be at least ' . number_format($minBid, 2) . ' (Current bid + bid increment).',
         ]);
 
-        // Stop any existing active proxy bid for this user and auction
-        ProxyBid::where('auction_id', $auction->id)
+        ProxyBid::where('auction_lot_id', $lot->id)
             ->where('user_id', Auth::id())
             ->where('status', 'active')
             ->update([
                 'status' => 'stopped',
                 'stopped_at' => now(),
-                'stop_reason' => 'Replaced by new proxy configuration.'
+                'stop_reason' => 'Replaced by new proxy configuration.',
             ]);
 
-        // Create new active proxy bid
         ProxyBid::create([
             'auction_id' => $auction->id,
+            'auction_lot_id' => $lot->id,
             'user_id' => Auth::id(),
             'max_amount' => $request->max_amount,
-            'current_auto_bid' => $auction->current_bid,
+            'current_auto_bid' => $lot->current_bid,
             'status' => 'active',
-            'started_at' => now()
+            'started_at' => now(),
         ]);
 
-        // Immediately trigger check
-        IvaluaProxyBidJob::dispatch($auction->id);
+        IvaluaProxyBidJob::dispatch($lot->id);
 
         return back()->with('success', 'Custom proxy bidding has been activated. The system will now auto-bid up to ' . number_format($request->max_amount, 2));
     }
 
-    /**
-     * Cancel an active proxy bid.
-     */
     public function cancelProxyBid($id)
     {
-        $proxy = ProxyBid::where('auction_id', $id)
+        $lot = AuctionLot::findOrFail($id);
+
+        $proxy = ProxyBid::where('auction_lot_id', $lot->id)
             ->where('user_id', Auth::id())
             ->where('status', 'active')
             ->firstOrFail();
@@ -175,18 +160,15 @@ class AuctionController extends Controller
         $proxy->update([
             'status' => 'cancelled',
             'stopped_at' => now(),
-            'stop_reason' => 'Cancelled by user.'
+            'stop_reason' => 'Cancelled by user.',
         ]);
 
         return back()->with('success', 'Proxy bidding has been cancelled.');
     }
 
-    /**
-     * Display user's bidding history.
-     */
     public function myBids()
     {
-        $bids = Bid::with('auction')
+        $bids = Bid::with(['lot.auction', 'auction'])
             ->where('user_id', Auth::id())
             ->orderBy('created_at', 'desc')
             ->paginate(15);
@@ -194,12 +176,9 @@ class AuctionController extends Controller
         return view('auctions.my-bids', compact('bids'));
     }
 
-    /**
-     * Display user's active proxy bids.
-     */
     public function myProxies()
     {
-        $proxies = ProxyBid::with('auction')
+        $proxies = ProxyBid::with(['lot.auction', 'auction'])
             ->where('user_id', Auth::id())
             ->orderBy('created_at', 'desc')
             ->paginate(15);
@@ -207,16 +186,13 @@ class AuctionController extends Controller
         return view('auctions.my-proxies', compact('proxies'));
     }
 
-    /**
-     * JSON Endpoint for AJAX polling to fetch real-time bid state updates.
-     */
     public function pollState($id)
     {
-        $auction = Auction::findOrFail($id);
+        $lot = AuctionLot::with('auction')->findOrFail($id);
+        $auction = $lot->auction;
 
-        // Fetch last 10 bid histories
         $history = BidHistory::with('user')
-            ->where('auction_id', $auction->id)
+            ->where('auction_lot_id', $lot->id)
             ->orderBy('created_at', 'desc')
             ->take(10)
             ->get()
@@ -226,14 +202,14 @@ class AuctionController extends Controller
                     'source' => ucfirst($item->source),
                     'user' => $item->user ? $item->user->name : 'External Bidder',
                     'time' => $item->created_at->diffForHumans(),
-                    'status' => $item->status
+                    'status' => $item->status,
                 ];
             });
 
-        // Get user's active proxy bid max amount
         $activeProxy = null;
+        $myBid = null;
         if (Auth::check()) {
-            $proxyObj = ProxyBid::where('auction_id', $auction->id)
+            $proxyObj = ProxyBid::where('auction_lot_id', $lot->id)
                 ->where('user_id', Auth::id())
                 ->where('status', 'active')
                 ->first();
@@ -243,15 +219,30 @@ class AuctionController extends Controller
                     'current_auto_bid' => number_format($proxyObj->current_auto_bid, 2),
                 ];
             }
+
+            $latestBid = Bid::where('auction_lot_id', $lot->id)
+                ->where('user_id', Auth::id())
+                ->latest()
+                ->first();
+            if ($latestBid) {
+                $myBid = [
+                    'amount' => number_format($latestBid->amount, 2),
+                    'status' => $latestBid->status,
+                    'failure_reason' => $latestBid->failure_reason,
+                    'updated' => $latestBid->updated_at->diffForHumans(),
+                ];
+            }
         }
 
         return response()->json([
-            'current_bid' => number_format($auction->current_bid, 2),
-            'bid_increment' => number_format($auction->bid_increment, 2),
-            'time_remaining' => $auction->time_remaining,
-            'status' => ucfirst($auction->status),
+            'current_bid' => number_format($lot->current_bid, 2),
+            'bid_increment' => number_format($lot->bid_increment, 2),
+            'time_remaining' => $lot->time_remaining,
+            'status' => ucfirst($lot->status),
+            'event' => $auction->auction_group ?? $auction->external_event_id,
             'history' => $history,
-            'proxy' => $activeProxy
+            'proxy' => $activeProxy,
+            'my_bid' => $myBid,
         ]);
     }
 }

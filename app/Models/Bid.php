@@ -9,6 +9,7 @@ class Bid extends Model
 {
     protected $fillable = [
         'auction_id',
+        'auction_lot_id',
         'user_id',
         'bid_type',
         'amount',
@@ -26,17 +27,16 @@ class Bid extends Model
         'processed_at' => 'datetime',
     ];
 
-    /**
-     * Get the auction this bid is for.
-     */
     public function auction(): BelongsTo
     {
         return $this->belongsTo(Auction::class);
     }
 
-    /**
-     * Get the user who placed the bid.
-     */
+    public function lot(): BelongsTo
+    {
+        return $this->belongsTo(AuctionLot::class, 'auction_lot_id');
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

@@ -27,12 +27,14 @@
                                 @forelse($proxies as $proxy)
                                     <tr>
                                         <td class="py-4 pl-4 font-semibold text-white">
-                                            @if($proxy->auction)
-                                                <a href="{{ route('auctions.show', $proxy->auction_id) }}" class="hover:text-blue-400 transition-colors">
-                                                    {{ $proxy->auction->title }}
+                                            @if($proxy->lot)
+                                                <a href="{{ route('auctions.show', $proxy->auction_lot_id) }}" class="hover:text-blue-400 transition-colors">
+                                                    {{ $proxy->lot->title }}
                                                 </a>
+                                            @elseif($proxy->auction)
+                                                <span class="text-slate-400">{{ $proxy->auction->title }}</span>
                                             @else
-                                                <span class="text-slate-500">Deleted Auction</span>
+                                                <span class="text-slate-500">Deleted Lot</span>
                                             @endif
                                         </td>
                                         <td class="py-4 font-bold text-white">
@@ -66,16 +68,16 @@
                                         </td>
                                         <td class="py-4 pr-4 text-right">
                                             <div class="flex justify-end items-center space-x-3">
-                                                @if($proxy->status === 'active' && $proxy->auction)
-                                                    <form action="{{ route('auctions.proxy.cancel', $proxy->auction_id) }}" method="POST" class="inline">
+                                                @if($proxy->status === 'active' && $proxy->auction_lot_id)
+                                                    <form action="{{ route('auctions.proxy.cancel', $proxy->auction_lot_id) }}" method="POST" class="inline">
                                                         @csrf
                                                         <button type="submit" class="text-xs font-semibold text-rose-400 hover:text-rose-300">
                                                             Cancel
                                                         </button>
                                                     </form>
                                                 @endif
-                                                @if($proxy->auction)
-                                                    <a href="{{ route('auctions.show', $proxy->auction_id) }}" class="text-xs font-semibold text-blue-400 hover:text-blue-300">
+                                                @if($proxy->auction_lot_id)
+                                                    <a href="{{ route('auctions.show', $proxy->auction_lot_id) }}" class="text-xs font-semibold text-blue-400 hover:text-blue-300">
                                                         View Details
                                                     </a>
                                                 @endif

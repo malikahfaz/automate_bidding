@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Auction;
+use App\Jobs\BulkSyncIvaluaJob;
 use App\Jobs\SyncAuctionJob;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -58,15 +59,30 @@ class SyncAuctions extends Command
      */
     private function syncActiveAuctions(): void
     {
-        $auctions = Auction::where('is_active', true)
+        $ivaluaCount = Auction::where('platform', 'ivalua')
+            ->where('is_active', true)
+            ->where('status', 'active')
+            ->count();
+
+        $bstockAuctions = Auction::where('platform', 'bstock')
+            ->where('is_active', true)
             ->where('status', 'active')
             ->get();
 
-        $this->info("Found " . $auctions->count() . " active auctions to sync.");
+        if ($ivaluaCount > 0) {
+            $this->info("Dispatching 1 BulkSyncIvaluaJob for {$ivaluaCount} Ivalua lot(s) (single browser session).");
+            BulkSyncIvaluaJob::dispatch();
+        }
 
-        foreach ($auctions as $auction) {
-            $this->line("Dispatching SyncAuctionJob for ID: {$auction->id} ({$auction->platform})");
-            SyncAuctionJob::dispatch($auction->id);
+        if ($bstockAuctions->isNotEmpty()) {
+            $this->info('Dispatching ' . $bstockAuctions->count() . ' B-Stock sync job(s).');
+            foreach ($bstockAuctions as $auction) {
+                SyncAuctionJob::dispatch($auction->id);
+            }
+        }
+
+        if ($ivaluaCount === 0 && $bstockAuctions->isEmpty()) {
+            $this->info('No active auctions to sync.');
         }
     }
 }

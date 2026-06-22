@@ -3,17 +3,23 @@
         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
                 <div class="flex items-center gap-3 mb-2">
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold {{ $auction->platform === 'bstock' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' }}">
-                        {{ strtoupper($auction->platform) }}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold {{ $lot->auction->platform === 'bstock' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' }}">
+                        {{ strtoupper($lot->auction->platform) }}
                     </span>
+                    @if($lot->auction->auction_group || $lot->auction->external_event_id)
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                            Event {{ $lot->auction->auction_group ?? $lot->auction->external_event_id }}
+                        </span>
+                    @endif
                     <span id="badge-live-status" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
                         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse"></span>
                         LIVE
                     </span>
                 </div>
                 <h2 class="font-extrabold text-2xl text-white leading-tight">
-                    {{ $auction->title }}
+                    {{ $lot->title }}
                 </h2>
+                <p class="text-xs text-slate-500 font-mono mt-1">{{ $lot->external_lot_id }}</p>
             </div>
             <a href="{{ route('auctions.index') }}" class="inline-flex justify-center items-center px-4 py-2 border border-slate-800 rounded-xl text-sm font-semibold text-slate-300 bg-slate-900 hover:text-white hover:bg-slate-850/80 transition-colors">
                 Back to Marketplace
@@ -31,25 +37,24 @@
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 text-center sm:text-left">
                         <div class="p-4 rounded-xl bg-slate-950 border border-slate-850/65">
                             <span class="block text-xs uppercase tracking-wider text-slate-500 font-semibold mb-1">Current Bid</span>
-                            <span id="txt-current-bid" class="text-3xl font-extrabold text-white">${{ number_format($auction->current_bid, 2) }}</span>
+                            <span id="txt-current-bid" class="text-3xl font-extrabold text-white">${{ number_format($lot->current_bid, 2) }}</span>
                         </div>
                         <div class="p-4 rounded-xl bg-slate-950 border border-slate-850/65">
                             <span class="block text-xs uppercase tracking-wider text-slate-500 font-semibold mb-1">Bid Increment</span>
-                            <span id="txt-bid-increment" class="text-2xl font-bold text-slate-200">+${{ number_format($auction->bid_increment, 2) }}</span>
+                            <span id="txt-bid-increment" class="text-2xl font-bold text-slate-200">+${{ number_format($lot->bid_increment, 2) }}</span>
                         </div>
                         <div class="p-4 rounded-xl bg-slate-950 border border-slate-850/65">
                             <span class="block text-xs uppercase tracking-wider text-slate-500 font-semibold mb-1">Time Remaining</span>
-                            <span id="txt-time-remaining" class="text-2xl font-bold text-blue-400">{{ $auction->time_remaining }}</span>
-                            <!-- Hidden timestamp helper for JS countdown -->
-                            <span id="meta-ends-at" class="hidden">{{ $auction->ends_at ? $auction->ends_at->toISOString() : '' }}</span>
+                            <span id="txt-time-remaining" class="text-2xl font-bold text-blue-400">{{ $lot->time_remaining }}</span>
+                            <span id="meta-ends-at" class="hidden">{{ $lot->ends_at ? $lot->ends_at->toISOString() : '' }}</span>
                         </div>
                     </div>
 
                     <div class="mt-6 border-t border-slate-850 pt-6">
                         <h4 class="text-sm font-semibold text-slate-300 mb-2">External Auction URL</h4>
                         <div class="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-850">
-                            <span class="text-xs text-slate-400 truncate pr-4">{{ $auction->external_url }}</span>
-                            <a href="{{ $auction->external_url }}" target="_blank" class="shrink-0 text-xs font-semibold text-blue-400 hover:text-blue-300 inline-flex items-center">
+                            <span class="text-xs text-slate-400 truncate pr-4">{{ $lot->auction->external_url }}</span>
+                            <a href="{{ $lot->auction->external_url }}" target="_blank" class="shrink-0 text-xs font-semibold text-blue-400 hover:text-blue-300 inline-flex items-center">
                                 View Original
                                 <svg class="w-3.5 h-3.5 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -61,31 +66,45 @@
 
                 <!-- Bid Placement Forms -->
                 @auth
-                    <div class="p-6 sm:p-8 rounded-2xl bg-slate-900 border border-slate-800/80 shadow-xl shadow-slate-950/20">
-                        <h3 class="text-lg font-bold text-white mb-6">Place Your Bid</h3>
+                    @if(session('success'))
+                        <div class="mb-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm">
+                            {{ session('success') }}
+                        </div>
+                    @endif
+                    @if(session('error'))
+                        <div class="mb-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm">
+                            {{ session('error') }}
+                        </div>
+                    @endif
+
+                    <div id="bid-execution-status" class="hidden mb-6 p-4 rounded-xl border text-sm"></div>
+
+                    <div id="bid-form" class="p-6 sm:p-8 rounded-2xl bg-slate-900 border border-slate-800/80 shadow-xl shadow-slate-950/20">
+                        <h3 class="text-lg font-bold text-white mb-2">Place Your Bid</h3>
+                        <p class="text-xs text-slate-500 mb-6">Bid here — system automatically places it on Ivalua using the master account.</p>
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
                             <!-- Direct/Normal Bid Form -->
                             <div class="p-5 rounded-2xl bg-slate-950 border border-slate-850/80">
-                                <h4 class="text-sm font-bold text-white mb-2">Direct Placement</h4>
-                                <p class="text-slate-400 text-xs mb-4">Execute a direct one-time bid on the platform.</p>
+                                <h4 class="text-sm font-bold text-white mb-2">Bid on Ivalua (via this site)</h4>
+                                <p class="text-slate-400 text-xs mb-4">Amount is sent to Ivalua automatically — no need to open their website.</p>
                                 
-                                <form action="{{ route('auctions.bid', $auction->id) }}" method="POST" class="space-y-4">
+                                <form action="{{ route('auctions.bid', $lot->id) }}" method="POST" class="space-y-4">
                                     @csrf
                                     <div>
                                         <label for="amount" class="block text-xs font-medium text-slate-400 mb-2">Bid Amount ($)</label>
                                         <div class="relative">
                                             <input type="number" step="0.01" name="amount" id="amount" 
-                                                min="{{ $auction->current_bid + $auction->bid_increment }}" 
-                                                value="{{ old('amount', $auction->current_bid + $auction->bid_increment) }}" 
+                                                min="{{ $lot->current_bid + $lot->bid_increment }}" 
+                                                value="{{ old('amount', $lot->current_bid + $lot->bid_increment) }}" 
                                                 class="w-full rounded-xl bg-slate-900 border-slate-800 focus:border-blue-500 focus:ring-blue-500 text-sm text-slate-200 py-3 pl-4">
                                         </div>
                                         <p class="mt-2 text-[10px] text-slate-500">
-                                            Minimum required bid: <strong id="lbl-min-bid">${{ number_format($auction->current_bid + $auction->bid_increment, 2) }}</strong>
+                                            Minimum required bid: <strong id="lbl-min-bid">${{ number_format($lot->current_bid + $lot->bid_increment, 2) }}</strong>
                                         </p>
                                     </div>
                                     <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-3 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-xl shadow transition duration-150">
-                                        Submit Bid to Queue
+                                        Place Bid on Ivalua
                                     </button>
                                 </form>
                             </div>
@@ -93,36 +112,35 @@
                             <!-- Custom Proxy Bid Form (Only for Ivalua) -->
                             <div class="p-5 rounded-2xl bg-slate-950 border border-slate-850/80">
                                 <h4 class="text-sm font-bold text-white mb-2">Automated Proxy Bidding</h4>
-                                @if($auction->platform === 'ivalua')
+                                @if($lot->auction->platform === 'ivalua')
                                     <p class="text-slate-400 text-xs mb-4">Centralized engine will auto-bid in increments up to your maximum.</p>
                                     
-                                    <!-- Check if user has active proxy configuration -->
-                                    @if($auction->activeProxyBid)
+                                    @if($lot->activeProxyBid)
                                         <div class="p-4 rounded-xl bg-blue-500/5 border border-blue-500/10 mb-4">
                                             <span class="block text-[10px] uppercase font-bold text-blue-400 mb-1">Active Config</span>
                                             <div class="flex justify-between text-xs text-slate-300">
                                                 <span>Max Limit:</span>
-                                                <strong id="val-proxy-max">${{ number_format($auction->activeProxyBid->max_amount, 2) }}</strong>
+                                                <strong id="val-proxy-max">${{ number_format($lot->activeProxyBid->max_amount, 2) }}</strong>
                                             </div>
                                             <div class="flex justify-between text-xs text-slate-300 mt-1">
                                                 <span>Last Auto-Bid:</span>
-                                                <strong id="val-proxy-current">${{ number_format($auction->activeProxyBid->current_auto_bid, 2) }}</strong>
+                                                <strong id="val-proxy-current">${{ number_format($lot->activeProxyBid->current_auto_bid, 2) }}</strong>
                                             </div>
                                         </div>
-                                        <form action="{{ route('auctions.proxy.cancel', $auction->id) }}" method="POST">
+                                        <form action="{{ route('auctions.proxy.cancel', $lot->id) }}" method="POST">
                                             @csrf
                                             <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-3 text-sm font-semibold text-rose-400 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 rounded-xl transition duration-150">
                                                 Cancel Proxy Bidding
                                             </button>
                                         </form>
                                     @else
-                                        <form action="{{ route('auctions.proxy', $auction->id) }}" method="POST" class="space-y-4">
+                                        <form action="{{ route('auctions.proxy', $lot->id) }}" method="POST" class="space-y-4">
                                             @csrf
                                             <div>
                                                 <label for="max_amount" class="block text-xs font-medium text-slate-400 mb-2">Maximum Bid Limit ($)</label>
                                                 <input type="number" step="0.01" name="max_amount" id="max_amount" 
-                                                    min="{{ $auction->current_bid + $auction->bid_increment }}" 
-                                                    value="{{ old('max_amount', $auction->current_bid + $auction->bid_increment * 5) }}" 
+                                                    min="{{ $lot->current_bid + $lot->bid_increment }}" 
+                                                    value="{{ old('max_amount', $lot->current_bid + $lot->bid_increment * 5) }}" 
                                                     class="w-full rounded-xl bg-slate-900 border-slate-800 focus:border-indigo-500 focus:ring-indigo-500 text-sm text-slate-200 py-3 pl-4">
                                             </div>
                                             <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-3 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl shadow transition duration-150">
@@ -192,7 +210,7 @@
                                         </tr>
                                     </thead>
                                     <tbody id="tbl-bid-history" class="divide-y divide-slate-850/50 text-xs">
-                                        @forelse($auction->bidHistories->take(10) as $hist)
+                                        @forelse($lot->bidHistories->take(10) as $hist)
                                             <tr class="text-slate-300">
                                                 <td class="py-2.5 pl-4 font-bold text-white">${{ number_format($hist->amount, 2) }}</td>
                                                 <td class="py-2.5">
@@ -220,8 +238,7 @@
     <!-- Polling & Countdown Script -->
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            const auctionId = "{{ $auction->id }}";
-            const pollingUrl = "{{ route('auctions.polling', $auction->id) }}";
+            const pollingUrl = "{{ route('auctions.polling', $lot->id) }}";
             
             // 1. AJAX Polling for real-time bid updates
             function pollState() {
@@ -273,6 +290,27 @@
                             const proxyCurVal = document.getElementById('val-proxy-current');
                             if (proxyMaxVal) proxyMaxVal.innerText = '$' + data.proxy.max_amount;
                             if (proxyCurVal) proxyCurVal.innerText = '$' + data.proxy.current_auto_bid;
+                        }
+
+                        // Update user's bid execution status
+                        const statusBox = document.getElementById('bid-execution-status');
+                        if (statusBox && data.my_bid) {
+                            const st = data.my_bid.status;
+                            let cls = 'bg-slate-800/50 border-slate-700 text-slate-300';
+                            let label = 'Your last bid: $' + data.my_bid.amount;
+                            if (st === 'pending' || st === 'processing') {
+                                cls = 'bg-amber-500/10 border-amber-500/20 text-amber-300';
+                                label = '⏳ Placing $' + data.my_bid.amount + ' on Ivalua… (' + st + ')';
+                            } else if (st === 'successful') {
+                                cls = 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300';
+                                label = '✓ $' + data.my_bid.amount + ' placed on Ivalua successfully';
+                            } else if (st === 'failed') {
+                                cls = 'bg-rose-500/10 border-rose-500/20 text-rose-300';
+                                label = '✗ Bid failed: ' + (data.my_bid.failure_reason || 'Unknown error');
+                            }
+                            statusBox.className = 'mb-6 p-4 rounded-xl border text-sm ' + cls;
+                            statusBox.textContent = label;
+                            statusBox.classList.remove('hidden');
                         }
 
                         // Update Bid History Table
