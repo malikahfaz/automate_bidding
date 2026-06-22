@@ -49,7 +49,7 @@ class RunAutomationStack extends Command
         }
 
         $this->info('[3/3] Starting background workers (Ctrl+C to stop) ...');
-        $this->line('  • Queue worker — places bids on Ivalua');
+        $this->line('  • Queue worker (bids first) — places bids on Ivalua');
         $this->line("  • Bid sync every {$syncInterval}s — live prices on website");
         $this->line("  • Proxy monitor every {$proxyInterval}s — auto-bidding");
         if (!$this->option('skip-import') && $watchInterval > 0) {
@@ -62,7 +62,7 @@ class RunAutomationStack extends Command
         $this->newLine();
 
         $processes = [
-            escapeshellarg("{$artisan} queue:work --sleep=3 --tries=3"),
+            escapeshellarg("{$artisan} queue:work --queue=bids,default --sleep=1 --tries=3"),
             escapeshellarg("{$artisan} auctions:sync --daemon --interval={$syncInterval}"),
             escapeshellarg("{$artisan} proxy-bids:monitor --daemon --interval={$proxyInterval}"),
         ];

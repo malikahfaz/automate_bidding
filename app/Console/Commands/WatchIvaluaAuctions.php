@@ -6,7 +6,6 @@ use App\Models\Auction;
 use App\Services\AutomationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 
 class WatchIvaluaAuctions extends Command
 {
@@ -52,7 +51,6 @@ class WatchIvaluaAuctions extends Command
             $result = $automation->runCommand('list-browse-events', 'ivalua');
         } catch (\Exception $e) {
             $this->warn('[' . now()->format('H:i:s') . '] Browse watch failed: ' . $e->getMessage());
-            Log::warning('Ivalua watch failed: ' . $e->getMessage());
             return;
         }
 
@@ -80,8 +78,6 @@ class WatchIvaluaAuctions extends Command
 
         $this->info('[' . now()->format('H:i:s') . "] New auction activity detected — {$reason}");
         $this->line('Running full import for new events + lots...');
-
-        Log::info("Ivalua watcher triggering import: {$reason}");
 
         $lock = Cache::lock('ivalua_import', 900);
 

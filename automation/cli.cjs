@@ -6,10 +6,28 @@ const fs = require('fs');
 const BStockAdapter = require('./adapters/BStockAdapter.cjs');
 const IvaluaAdapter = require('./adapters/IvaluaAdapter.cjs');
 
+/** Web PHP (Laragon/Apache) often has no TEMP/TMP — Playwright needs a writable temp dir. */
+function ensureAutomationTempDir() {
+    const fallback = path.resolve(__dirname, '..', 'storage', 'app', 'automation', 'tmp');
+    fs.mkdirSync(fallback, { recursive: true });
+
+    for (const key of ['TEMP', 'TMP', 'TMPDIR']) {
+        const val = process.env[key];
+        if (!val || val === 'undefined') {
+            process.env[key] = fallback;
+        }
+    }
+
+    return fallback;
+}
+
 async function main() {
+    ensureAutomationTempDir();
+
     const argv = parseArgs(process.argv.slice(2));
 
     const mockMode = argv.mock === true || argv.mock === 'true' || argv.mock === '1';
+    const verboseLog = argv['verbose-log'] === true || argv['verbose-log'] === 'true' || argv['verbose-log'] === '1';
     const action = argv.action; // login, sync, place-bid
     const platform = argv.platform; // bstock, ivalua
     const email = argv.email;
@@ -52,9 +70,9 @@ async function main() {
 
         // Initialize adapter
         if (platform === 'bstock') {
-            adapter = new BStockAdapter(page, cookiesPath, { mockMode });
+            adapter = new BStockAdapter(page, cookiesPath, { mockMode, verboseLog });
         } else if (platform === 'ivalua') {
-            adapter = new IvaluaAdapter(page, cookiesPath, { mockMode });
+            adapter = new IvaluaAdapter(page, cookiesPath, { mockMode, verboseLog });
         } else {
             throw new Error(`Unsupported platform: ${platform}`);
         }

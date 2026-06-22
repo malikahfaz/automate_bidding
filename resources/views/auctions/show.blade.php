@@ -17,9 +17,16 @@
                     </span>
                 </div>
                 <h2 class="font-extrabold text-2xl text-white leading-tight">
-                    {{ $lot->title }}
+                    @if($lot->title && $lot->title !== $lot->external_lot_id)
+                        {{ $lot->title }}
+                    @else
+                        {{ $lot->external_lot_id }}
+                    @endif
                 </h2>
                 <p class="text-xs text-slate-500 font-mono mt-1">{{ $lot->external_lot_id }}</p>
+                @if($lot->description)
+                    <p class="text-sm text-slate-400 mt-2 leading-snug">{{ $lot->description }}</p>
+                @endif
             </div>
             <a href="{{ route('auctions.index') }}" class="inline-flex justify-center items-center px-4 py-2 border border-slate-800 rounded-xl text-sm font-semibold text-slate-300 bg-slate-900 hover:text-white hover:bg-slate-850/80 transition-colors">
                 Back to Marketplace
@@ -32,6 +39,39 @@
             
             <!-- Left 2 Cols: Details and Bid Placement Form -->
             <div class="lg:col-span-2 space-y-8">
+                <!-- Target lot on Ivalua console (multiple lots share one console page) -->
+                <div class="p-5 sm:p-6 rounded-2xl bg-indigo-500/5 border-2 border-indigo-500/25 shadow-xl shadow-slate-950/20">
+                    <p class="text-[10px] uppercase tracking-wider font-bold text-indigo-400 mb-2">You are bidding on this Ivalua lot</p>
+                    <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+                        <div>
+                            <p class="text-3xl font-extrabold text-white font-mono tracking-tight">{{ $lot->external_lot_id }}</p>
+                            @if($lot->title && $lot->title !== $lot->external_lot_id)
+                                <p class="text-lg font-semibold text-slate-200 mt-2">{{ $lot->title }}</p>
+                            @endif
+                            @if($lot->description)
+                                <p class="text-sm text-slate-400 mt-2">{{ $lot->description }}</p>
+                            @endif
+                            @if($consoleId)
+                                <p class="text-sm text-slate-400 mt-1">
+                                    Console event <span class="font-mono text-indigo-300">#{{ $consoleId }}</span>
+                                    · {{ $consoleLots->count() }} lots on same page
+                                </p>
+                            @endif
+                        </div>
+                        <a href="{{ $lot->auction->external_url }}" target="_blank" rel="noopener"
+                           class="shrink-0 inline-flex items-center px-4 py-2 rounded-xl text-xs font-semibold text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/20">
+                            Open on Ivalua
+                            <svg class="w-3.5 h-3.5 ml-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                        </a>
+                    </div>
+                    <p class="mt-3 text-[11px] text-slate-500 leading-relaxed">
+                        Ivalua shows many lots on one console URL. Your bid is sent only to lot
+                        <strong class="text-slate-300">{{ $lot->external_lot_id }}</strong> — automation finds that exact row and clicks its <strong class="text-slate-300">Bid</strong> link.
+                    </p>
+                </div>
+
                 <!-- Auction Core info -->
                 <div class="p-6 sm:p-8 rounded-2xl bg-slate-900 border border-slate-800/80 shadow-xl shadow-slate-950/20">
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 text-center sm:text-left">
@@ -91,6 +131,7 @@
                                 
                                 <form action="{{ route('auctions.bid', $lot->id) }}" method="POST" class="space-y-4">
                                     @csrf
+                                    <input type="hidden" name="external_lot_id" value="{{ $lot->external_lot_id }}">
                                     <div>
                                         <label for="amount" class="block text-xs font-medium text-slate-400 mb-2">Bid Amount ($)</label>
                                         <div class="relative">
@@ -104,12 +145,12 @@
                                         </p>
                                     </div>
                                     <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-3 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-xl shadow transition duration-150">
-                                        Place Bid on Ivalua
+                                        Place Bid on {{ $lot->external_lot_id }}
                                     </button>
                                 </form>
                             </div>
 
-                            <!-- Custom Proxy Bid Form (Only for Ivalua) -->
+                            {{-- Custom Proxy Bid Form (Only for Ivalua) — disabled
                             <div class="p-5 rounded-2xl bg-slate-950 border border-slate-850/80">
                                 <h4 class="text-sm font-bold text-white mb-2">Automated Proxy Bidding</h4>
                                 @if($lot->auction->platform === 'ivalua')
@@ -161,6 +202,7 @@
                                     </div>
                                 @endif
                             </div>
+                            --}}
                         </div>
                     </div>
                 @else
@@ -177,6 +219,39 @@
 
             <!-- Right 1 Col: Warning Cards & Realtime History -->
             <div class="space-y-8">
+                @if(isset($consoleLots) && $consoleLots->count() > 1)
+                    <div class="p-6 rounded-2xl bg-slate-900 border border-slate-800/80 shadow-xl shadow-slate-950/20">
+                        <h3 class="text-sm font-bold text-white mb-1">Other lots on console @if($consoleId)#{{ $consoleId }}@endif</h3>
+                        <p class="text-[10px] text-slate-500 mb-4">Same Ivalua page — each lot has its own bid page here.</p>
+                        <div class="max-h-[22rem] overflow-y-auto overflow-x-hidden scrollbar-dark pr-1.5 -mr-0.5">
+                            <ul class="space-y-2 text-xs">
+                            @foreach($consoleLots as $sibling)
+                                <li>
+                                    <a href="{{ route('auctions.show', $sibling->id) }}"
+                                       class="block px-3 py-2.5 rounded-lg border transition-colors {{ $sibling->id === $lot->id ? 'bg-indigo-500/15 border-indigo-500/30' : 'border-slate-850 hover:bg-slate-850 hover:border-slate-700' }}">
+                                        <div class="flex items-start justify-between gap-2">
+                                            <span class="font-mono text-[11px] shrink-0 {{ $sibling->id === $lot->id ? 'text-indigo-300 font-bold' : 'text-slate-500' }}">{{ $sibling->external_lot_id }}</span>
+                                            <span class="font-semibold text-white shrink-0">${{ number_format($sibling->current_bid, 0) }}</span>
+                                        </div>
+                                        @if($sibling->title && $sibling->title !== $sibling->external_lot_id)
+                                            <p class="mt-1 text-[11px] font-medium text-slate-200 leading-snug line-clamp-2">{{ $sibling->title }}</p>
+                                        @endif
+                                        @if($sibling->description)
+                                            <p class="mt-0.5 text-[10px] text-slate-500 leading-snug line-clamp-2">{{ $sibling->description }}</p>
+                                        @elseif($sibling->cosmetic_grade || $sibling->quantity)
+                                            <p class="mt-0.5 text-[10px] text-slate-500">
+                                                @if($sibling->cosmetic_grade) Grade {{ $sibling->cosmetic_grade }} @endif
+                                                @if($sibling->quantity) · Qty {{ $sibling->quantity }} @endif
+                                            </p>
+                                        @endif
+                                    </a>
+                                </li>
+                            @endforeach
+                            </ul>
+                        </div>
+                    </div>
+                @endif
+
                 <!-- Bid execution Warning -->
                 <div class="p-6 rounded-2xl bg-amber-500/5 border border-amber-500/10 shadow-xl shadow-slate-950/20">
                     <div class="flex items-start gap-3">
@@ -300,10 +375,10 @@
                             let label = 'Your last bid: $' + data.my_bid.amount;
                             if (st === 'pending' || st === 'processing') {
                                 cls = 'bg-amber-500/10 border-amber-500/20 text-amber-300';
-                                label = '⏳ Placing $' + data.my_bid.amount + ' on Ivalua… (' + st + ')';
+                                label = '⏳ Placing $' + data.my_bid.amount + ' on Ivalua lot {{ $lot->external_lot_id }}… (' + st + ')';
                             } else if (st === 'successful') {
                                 cls = 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300';
-                                label = '✓ $' + data.my_bid.amount + ' placed on Ivalua successfully';
+                                label = '✓ $' + data.my_bid.amount + ' placed on {{ $lot->external_lot_id }} successfully';
                             } else if (st === 'failed') {
                                 cls = 'bg-rose-500/10 border-rose-500/20 text-rose-300';
                                 label = '✗ Bid failed: ' + (data.my_bid.failure_reason || 'Unknown error');

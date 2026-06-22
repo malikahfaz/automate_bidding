@@ -13,7 +13,6 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 
 class IvaluaProxyBidJob implements ShouldQueue
 {
@@ -51,8 +50,6 @@ class IvaluaProxyBidJob implements ShouldQueue
         if (!$lock->get()) {
             return;
         }
-
-        Log::info("Running Ivalua Proxy Bidding check for Lot: {$lot->id}, User: {$proxyBid->user_id}");
 
         try {
             $syncData = $automation->runCommand('sync', 'ivalua', [
@@ -106,14 +103,12 @@ class IvaluaProxyBidJob implements ShouldQueue
                 ->first();
 
             if ($lastSuccessBid && $currentBid <= $lastSuccessBid->amount) {
-                Log::info("System is currently winning lot {$lot->id} (Current bid: {$currentBid}, Our bid: {$lastSuccessBid->amount}). No bid needed.");
                 return;
             }
 
             $nextBid = $currentBid + $increment;
 
             if ($nextBid > $proxyBid->max_amount) {
-                Log::info("Next required bid {$nextBid} exceeds user max amount {$proxyBid->max_amount}. Stopping proxy bid.");
                 $proxyBid->update([
                     'status' => 'stopped',
                     'stopped_at' => now(),
@@ -132,8 +127,6 @@ class IvaluaProxyBidJob implements ShouldQueue
                 ]);
                 return;
             }
-
-            Log::info("Proxy placing bid of {$nextBid} (Max limit: {$proxyBid->max_amount})");
 
             $bid = Bid::create([
                 'auction_id' => $auction->id,
@@ -179,11 +172,7 @@ class IvaluaProxyBidJob implements ShouldQueue
                     'status' => 'successful',
                 ]);
 
-                Log::info("Proxy bid {$bid->id} of amount {$nextBid} placed successfully.");
-
             } catch (\Exception $bidEx) {
-                Log::error("Proxy bid placement failed for bid ID {$bid->id}: " . $bidEx->getMessage());
-
                 $bid->update([
                     'status' => 'failed',
                     'failure_reason' => $bidEx->getMessage(),
@@ -202,7 +191,7 @@ class IvaluaProxyBidJob implements ShouldQueue
             }
 
         } catch (\Exception $e) {
-            Log::error("Error in IvaluaProxyBidJob for lot {$this->auctionLotId}: " . $e->getMessage());
+            // silent — proxy state is in DB
         } finally {
             $lock->release();
         }

@@ -5,7 +5,6 @@ namespace App\Console\Commands;
 use App\Models\ProxyBid;
 use App\Jobs\IvaluaProxyBidJob;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 
 class MonitorProxyBids extends Command
 {
@@ -33,7 +32,6 @@ class MonitorProxyBids extends Command
 
         if ($daemon) {
             $this->info("Starting Proxy Bids Monitor Daemon (Interval: {$interval}s)...");
-            Log::info("Proxy Bids Monitor Daemon started.");
 
             while (true) {
                 $this->checkProxyBids();

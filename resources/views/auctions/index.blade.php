@@ -88,9 +88,18 @@
                             @endif
 
                             <h3 class="text-base font-bold text-white leading-snug group-hover:text-blue-400 transition-colors duration-250">
-                                <a href="{{ route('auctions.show', $lot->id) }}">{{ $lot->title }}</a>
+                                <a href="{{ route('auctions.show', $lot->id) }}">
+                                    @if($lot->title && $lot->title !== $lot->external_lot_id)
+                                        {{ $lot->title }}
+                                    @else
+                                        {{ $lot->external_lot_id }}
+                                    @endif
+                                </a>
                             </h3>
                             <p class="text-[10px] text-slate-500 mt-1 font-mono">{{ $lot->external_lot_id }}</p>
+                            @if($lot->description)
+                                <p class="text-[11px] text-slate-400 mt-2 leading-snug line-clamp-2">{{ $lot->description }}</p>
+                            @endif
                         </div>
 
                         <div class="mt-6 border-t border-slate-800/80 pt-6">

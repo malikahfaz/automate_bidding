@@ -21,4 +21,15 @@ return [
     'sync_interval' => (int) env('AUTOMATION_SYNC_INTERVAL', 10),
     'proxy_interval' => (int) env('AUTOMATION_PROXY_INTERVAL', 5),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Verbose automation logging
+    |--------------------------------------------------------------------------
+    |
+    | When false (default), background jobs do not write to laravel.log or
+    | automation_logs on every sync/bid. Failures are still recorded.
+    |
+    */
+    'verbose_log' => env('AUTOMATION_VERBOSE_LOG', false),
+
 ];

@@ -89,7 +89,7 @@ class AdminDashboardController extends Controller
         ]);
 
         // Dispatch job
-        PlaceBidJob::dispatch($newBid->id);
+        PlaceBidJob::dispatch($newBid->id)->onQueue('bids');
 
         return back()->with('success', 'Retry job dispatched successfully! A new bid placement attempt is processing.');
     }
