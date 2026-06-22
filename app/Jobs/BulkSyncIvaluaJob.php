@@ -27,7 +27,6 @@ class BulkSyncIvaluaJob implements ShouldQueue
         $lock = Cache::lock('bulk_sync_ivalua', 240);
 
         if (!$lock->get()) {
-            Log::info('BulkSyncIvaluaJob skipped: another bulk sync is already running.');
             return;
         }
 
@@ -50,8 +49,6 @@ class BulkSyncIvaluaJob implements ShouldQueue
                     'lot_ids' => $items->pluck('external_lot_id')->filter()->values()->all(),
                 ];
             })->values()->all();
-
-            Log::info('BulkSyncIvaluaJob: syncing ' . $lots->count() . ' lots across ' . count($consoles) . ' console page(s).');
 
             $result = $automation->runCommand('bulk-sync', 'ivalua', [
                 'consoles' => $consoles,
@@ -82,6 +79,9 @@ class BulkSyncIvaluaJob implements ShouldQueue
 
                 $dbLot->update([
                     'title' => $lotData['title'] ?? $dbLot->title,
+                    'description' => $lotData['description'] ?? $dbLot->description,
+                    'quantity' => $lotData['quantity'] ?? $dbLot->quantity,
+                    'cosmetic_grade' => $lotData['cosmetic_grade'] ?? $dbLot->cosmetic_grade,
                     'current_bid' => $lotData['current_bid'] ?? $dbLot->current_bid,
                     'bid_increment' => $lotData['bid_increment'] ?? $dbLot->bid_increment,
                     'time_remaining' => $lotData['time_remaining'] ?? $dbLot->time_remaining,
@@ -108,10 +108,10 @@ class BulkSyncIvaluaJob implements ShouldQueue
                 }
             }
 
-            Log::info('BulkSyncIvaluaJob completed. Scraped ' . count($result['lots'] ?? []) . ' lots.');
-
         } catch (\Exception $e) {
-            Log::error('BulkSyncIvaluaJob failed: ' . $e->getMessage());
+            if (config('automation.verbose_log')) {
+                Log::error('BulkSyncIvaluaJob failed: ' . $e->getMessage());
+            }
             throw $e;
         } finally {
             $lock->release();

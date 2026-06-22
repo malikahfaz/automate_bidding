@@ -8,7 +8,6 @@ use App\Models\BidHistory;
 use App\Services\AutomationService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class ImportIvaluaAuctions extends Command
@@ -140,6 +139,9 @@ class ImportIvaluaAuctions extends Command
                 ],
                 [
                     'title' => Str::limit($lot['title'] ?? $lot['external_lot_id'], 250, ''),
+                    'description' => $lot['description'] ?? null,
+                    'quantity' => $lot['quantity'] ?? null,
+                    'cosmetic_grade' => $lot['cosmetic_grade'] ?? null,
                     'current_bid' => $lot['current_bid'] ?? 0,
                     'bid_increment' => $lot['bid_increment'] ?? 1,
                     'time_remaining' => $lot['time_remaining'] ?? '',
@@ -216,8 +218,6 @@ class ImportIvaluaAuctions extends Command
 
         $this->newLine();
         $this->line('Website: open /auctions to browse imported lots.');
-
-        Log::info("Ivalua import OK: {$totalEvents} events, {$totalLots} lots in DB.");
 
         return Command::SUCCESS;
     }

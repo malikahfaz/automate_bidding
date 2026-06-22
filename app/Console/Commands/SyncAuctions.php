@@ -6,7 +6,6 @@ use App\Models\Auction;
 use App\Jobs\BulkSyncIvaluaJob;
 use App\Jobs\SyncAuctionJob;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 
 class SyncAuctions extends Command
 {
@@ -34,7 +33,6 @@ class SyncAuctions extends Command
 
         if ($daemon) {
             $this->info("Starting Auction Sync Daemon (Interval: {$interval}s)...");
-            Log::info("Auction Sync Daemon started.");
 
             while (true) {
                 $this->syncActiveAuctions();

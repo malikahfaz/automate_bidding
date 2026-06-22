@@ -34,8 +34,6 @@ class SyncAuctionJob implements ShouldQueue
             return;
         }
 
-        Log::info("Syncing auction event ID: {$auction->id} from {$auction->platform}");
-
         try {
             foreach ($auction->lots as $lot) {
                 if (!$lot->is_active) {
@@ -53,6 +51,9 @@ class SyncAuctionJob implements ShouldQueue
 
                 $lot->update([
                     'title' => $data['title'] ?? $lot->title,
+                    'description' => $data['description'] ?? $lot->description,
+                    'quantity' => $data['quantity'] ?? $lot->quantity,
+                    'cosmetic_grade' => $data['cosmetic_grade'] ?? $lot->cosmetic_grade,
                     'current_bid' => $data['current_bid'] ?? $lot->current_bid,
                     'bid_increment' => $data['bid_increment'] ?? $lot->bid_increment,
                     'time_remaining' => $data['time_remaining'] ?? $lot->time_remaining,
@@ -86,7 +87,9 @@ class SyncAuctionJob implements ShouldQueue
             ]);
 
         } catch (\Exception $e) {
-            Log::error("Failed to sync auction ID {$this->auctionId}: " . $e->getMessage());
+            if (config('automation.verbose_log')) {
+                Log::error("Failed to sync auction ID {$this->auctionId}: " . $e->getMessage());
+            }
 
             if ($this->attempts() >= $this->tries) {
                 $auction->update([

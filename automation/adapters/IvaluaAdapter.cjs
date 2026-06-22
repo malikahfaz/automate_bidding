@@ -6,7 +6,13 @@ class IvaluaAdapter {
         this.page = page;
         this.cookiesPath = cookiesPath;
         this.mockMode = options.mockMode === true;
+        this.verboseLog = options.verboseLog === true;
         this.lotIdPattern = /\b([A-Z]{3,5}\d{3,})\b/;
+
+        this.bidLog = [];
+
+        this._sessionEmail = null;
+        this._sessionPassword = null;
 
         this.selectors = {
             loginUrl: 'https://t-mobile.ivalua.app/page.aspx/en/usr/login',
@@ -28,6 +34,16 @@ class IvaluaAdapter {
         };
     }
 
+    logBid(step, meta = {}) {
+        if (!this.verboseLog) {
+            return;
+        }
+        const entry = { step, ...meta, at: new Date().toISOString() };
+        this.bidLog.push(entry);
+        const detail = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+        console.error(`[Ivalua-BID] ${step}${detail}`);
+    }
+
     async dismissPassiveNotifications() {
         try {
             const btn = this.page.locator(this.selectors.dismissNotificationBtn);
@@ -39,10 +55,59 @@ class IvaluaAdapter {
         }
     }
 
+    isAuthFailureUrl(url = '') {
+        return /\/usr\/(login|logout)/i.test(url) || /invalid_cookie|reason=/i.test(url);
+    }
+
+    async pageShowsAuthFailure() {
+        const url = this.page.url();
+        if (this.isAuthFailureUrl(url)) {
+            return true;
+        }
+        try {
+            const body = await this.page.locator('body').innerText({ timeout: 5000 });
+            return /session expired|logged out|please log in again|you are logged out/i.test(body);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    async reloginIfNeeded() {
+        if (!this._sessionEmail || !this._sessionPassword) {
+            throw new Error('Ivalua session expired. Master credentials required to re-login.');
+        }
+        console.log('[Ivalua] Session expired on page — re-logging in.');
+        await this.login(this._sessionEmail, this._sessionPassword);
+    }
+
+    async gotoAuthenticated(url, options = {}) {
+        const waitUntil = options.waitUntil || 'domcontentloaded';
+        const timeout = options.timeout || 60000;
+        const settleMs = options.settleMs ?? 3000;
+
+        await this.page.goto(url, { waitUntil, timeout });
+        await this.page.waitForTimeout(settleMs);
+
+        if (await this.pageShowsAuthFailure()) {
+            await this.reloginIfNeeded();
+            await this.page.goto(url, { waitUntil, timeout });
+            await this.page.waitForTimeout(settleMs);
+        }
+
+        if (await this.pageShowsAuthFailure()) {
+            throw new Error('Ivalua session could not be restored after re-login.');
+        }
+    }
+
     async isLoggedIn() {
         try {
             await this.page.goto(this.selectors.browseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await this.page.waitForTimeout(2000);
+
+            if (await this.pageShowsAuthFailure()) {
+                return false;
+            }
+
             const loginField = this.page.locator(this.selectors.emailInput);
             const loginVisible = await loginField.count() > 0 && await loginField.first().isVisible();
             return !loginVisible;
@@ -53,6 +118,9 @@ class IvaluaAdapter {
 
     async ensureSession(email, password) {
         console.log(`[Ivalua] Checking session using cookies at: ${this.cookiesPath}`);
+
+        this._sessionEmail = email;
+        this._sessionPassword = password;
 
         if (fs.existsSync(this.cookiesPath)) {
             try {
@@ -561,59 +629,109 @@ class IvaluaAdapter {
     }
 
     /**
-     * Parse all lot rows from the current auction_console page in one DOM pass.
+     * Ivalua v5 puts many lots in one <tr> — parse each lot block by Lot ID cell position.
      */
-    async parseAllLotsFromPage(filterLotIds = null) {
+    async scrapeConsoleLotsFromPage(filterLotIds = null) {
         return await this.page.locator('tr').evaluateAll((rows, filterIds) => {
             const filter = filterIds && filterIds.length ? new Set(filterIds) : null;
+            const lotIdPattern = /^[A-Z]{3,5}\d{3,}$/;
             const results = [];
-            const pattern = /\b([A-Z]{3,5}\d{3,})\b/;
+            const seen = new Set();
+
+            const parseBlock = (cells, lotId, startIdx) => {
+                const name = cells[startIdx + 1] || lotId;
+                const grade = cells[startIdx + 2] || '';
+                const qty = cells[startIdx + 3] || '';
+                const location = cells[startIdx + 4] || '';
+                const carrier = cells[startIdx + 5] || '';
+                const oem = cells[startIdx + 6] || '';
+                const condition = cells[startIdx + 7] || '';
+                const category = cells[startIdx + 10] || '';
+                const timeRem = cells[startIdx + 11] || '';
+
+                const blockSlice = cells.slice(startIdx + 13, startIdx + 22);
+                const blockText = blockSlice.join(' ');
+
+                let startingPrice = 0;
+                let increment = 0;
+                for (const part of blockSlice) {
+                    const p = part.match(/^([\d,]+\.\d{2})$/);
+                    if (!p) {
+                        continue;
+                    }
+                    const val = parseFloat(p[1].replace(/,/g, ''));
+                    if (startingPrice === 0) {
+                        startingPrice = val;
+                    } else if (increment === 0) {
+                        increment = val;
+                        break;
+                    }
+                }
+
+                const extMatch = blockText.match(/([\d,]+\.\d{2})\(Unit/i);
+                const current_bid = extMatch
+                    ? parseFloat(extMatch[1].replace(/,/g, ''))
+                    : startingPrice;
+
+                const endMatches = blockText.match(
+                    /(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+[AP]M)/gi
+                );
+                const endDate = endMatches ? endMatches[endMatches.length - 1] : '';
+
+                const descriptionParts = [];
+                if (grade) descriptionParts.push(`Grade ${grade}`);
+                if (qty) descriptionParts.push(`Qty ${qty}`);
+                if (location) descriptionParts.push(location);
+                if (carrier) descriptionParts.push(carrier);
+                if (oem) descriptionParts.push(oem);
+                if (condition) descriptionParts.push(condition);
+                if (category) descriptionParts.push(category);
+
+                return {
+                    lot_id: lotId,
+                    title: name,
+                    description: descriptionParts.join(' · '),
+                    quantity: parseInt(qty, 10) || null,
+                    cosmetic_grade: grade || null,
+                    current_bid,
+                    bid_increment: increment > 0 ? increment : 1,
+                    time_remaining: endDate || timeRem,
+                    ends_at: endDate ? new Date(endDate).toISOString() : null,
+                    status: 'active',
+                };
+            };
 
             for (const row of rows) {
-                const lotMatch = row.innerText.match(pattern);
-                if (!lotMatch) continue;
-
-                const lotId = lotMatch[1];
-                if (filter && !filter.has(lotId)) continue;
-
                 const cells = [...row.querySelectorAll('td')].map((td) =>
                     td.innerText.trim().replace(/\s+/g, ' ')
                 );
-                const rowText = cells.join(' ');
 
-                let title = lotId;
-                const lotIdIndex = cells.findIndex((c) => c === lotId || c.includes(lotId));
-                if (lotIdIndex >= 0 && cells[lotIdIndex + 1]) {
-                    title = cells[lotIdIndex + 1].substring(0, 250);
+                for (let i = 0; i < cells.length; i++) {
+                    const cell = cells[i];
+                    if (!cell || !lotIdPattern.test(cell)) {
+                        continue;
+                    }
+                    const lotId = cell;
+                    if (filter && !filter.has(lotId)) {
+                        continue;
+                    }
+                    if (seen.has(lotId)) {
+                        continue;
+                    }
+                    seen.add(lotId);
+                    results.push(parseBlock(cells, lotId, i));
                 }
-
-                const priceMatches = rowText.match(/([\d,]+\.\d{2})/g) || [];
-                const prices = priceMatches.map((p) => parseFloat(p.replace(/,/g, '')));
-                const startingPrice = prices[0] ?? 0;
-                const referencePrice = prices[1] ?? 0;
-
-                const extendedBidMatch = rowText.match(/([\d,]+\.\d{2})\(Unit/i);
-                const current_bid = extendedBidMatch
-                    ? parseFloat(extendedBidMatch[1].replace(/,/g, ''))
-                    : startingPrice;
-
-                const endDateMatch = rowText.match(
-                    /(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+[AP]M)/i
-                );
-
-                results.push({
-                    lot_id: lotId,
-                    title,
-                    current_bid,
-                    bid_increment: referencePrice > 0 ? referencePrice : 1,
-                    time_remaining: endDateMatch ? endDateMatch[1] : '',
-                    ends_at: endDateMatch ? new Date(endDateMatch[1]).toISOString() : null,
-                    status: 'active',
-                });
             }
 
             return results;
         }, filterLotIds || []);
+    }
+
+    /**
+     * Parse all lot rows from the current auction_console page in one DOM pass.
+     */
+    async parseAllLotsFromPage(filterLotIds = null) {
+        return await this.scrapeConsoleLotsFromPage(filterLotIds);
     }
 
     /**
@@ -627,8 +745,7 @@ class IvaluaAdapter {
             const lotIds = entry.lot_ids || [];
 
             console.log(`[Ivalua] Bulk sync console: ${url} (${lotIds.length} tracked lots)`);
-            await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            await this.page.waitForTimeout(2000);
+            await this.gotoAuthenticated(url, { settleMs: 2000 });
 
             const lots = await this.parseAllLotsFromPage(lotIds.length ? lotIds : null);
             for (const lot of lots) {
@@ -663,8 +780,7 @@ class IvaluaAdapter {
             };
         }
 
-        await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await this.page.waitForTimeout(3000);
+        await this.gotoAuthenticated(url, { settleMs: 3000 });
 
         if (url.includes('auction_console') && lotId) {
             return await this.readConsoleLotState(lotId);
@@ -692,43 +808,676 @@ class IvaluaAdapter {
     }
 
     async readConsoleLotState(lotId) {
-        const row = this.page.locator('tr').filter({ hasText: lotId }).first();
-        await row.waitFor({ timeout: 15000 });
+        const lots = await this.scrapeConsoleLotsFromPage([lotId]);
+        const lot = lots.find((entry) => entry.lot_id === lotId);
 
-        const cells = (await row.locator('td').allInnerTexts()).map((c) => c.trim().replace(/\s+/g, ' '));
-        const rowText = cells.join(' ');
-
-        let title = lotId;
-        const lotIdIndex = cells.findIndex((c) => c === lotId || c.includes(lotId));
-        if (lotIdIndex >= 0 && cells[lotIdIndex + 1]) {
-            title = cells[lotIdIndex + 1].substring(0, 250);
+        if (!lot) {
+            throw new Error(`Lot ${lotId} not found on console page ${this.page.url()}`);
         }
 
-        const priceMatches = rowText.match(/([\d,]+\.\d{2})/g) || [];
-        const prices = priceMatches.map((p) => parseFloat(p.replace(/,/g, '')));
-        const startingPrice = prices[0] ?? 0;
-        const referencePrice = prices[1] ?? 0;
-
-        const extendedBidMatch = rowText.match(/([\d,]+\.\d{2})\(Unit/i);
-        const current_bid = extendedBidMatch
-            ? parseFloat(extendedBidMatch[1].replace(/,/g, ''))
-            : startingPrice;
-
-        const endDateMatch = rowText.match(/(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+[AP]M)/i);
-
         return {
-            title,
-            current_bid,
-            bid_increment: referencePrice > 0 ? referencePrice : 1,
-            time_remaining: endDateMatch ? endDateMatch[1] : '',
-            ends_at: endDateMatch ? new Date(endDateMatch[1]).toISOString() : null,
-            status: 'active',
+            title: lot.title,
+            description: lot.description,
+            quantity: lot.quantity,
+            cosmetic_grade: lot.cosmetic_grade,
+            current_bid: lot.current_bid,
+            bid_increment: lot.bid_increment,
+            time_remaining: lot.time_remaining,
+            ends_at: lot.ends_at,
+            status: lot.status,
             lot_id: lotId,
         };
     }
 
+    /** Enable mass-bid inputs on auction_console (often hidden until toggled). */
+    async enableConsoleMassBidMode() {
+        const toggles = [
+            'input[id*="MassBid" i][type="checkbox"]',
+            'input[name*="MassBid" i][type="checkbox"]',
+            '#chkMassBidUp',
+            'input[id*="mass_bid" i][type="checkbox"]',
+            'label:has-text("Mass Bid")',
+            'a:has-text("Mass Bid")',
+            'button:has-text("Mass Bid")',
+        ];
+
+        for (const sel of toggles) {
+            try {
+                const el = this.page.locator(sel).first();
+                if (await el.count() === 0) {
+                    continue;
+                }
+
+                const tag = await el.evaluate((node) => node.tagName.toLowerCase());
+                if (tag === 'input') {
+                    const checked = await el.isChecked().catch(() => false);
+                    if (!checked) {
+                        await el.check({ force: true }).catch(async () => {
+                            await el.evaluate((node) => {
+                                node.checked = true;
+                                node.dispatchEvent(new Event('change', { bubbles: true }));
+                                node.dispatchEvent(new Event('click', { bubbles: true }));
+                            });
+                        });
+                    }
+                } else if (await el.isVisible().catch(() => false)) {
+                    await el.click({ timeout: 3000 });
+                }
+
+                await this.page.waitForTimeout(800);
+                return true;
+            } catch (_) {
+                // try next toggle
+            }
+        }
+
+        return false;
+    }
+
+    /** Find the Bid link in the same cell block as the target lot (multi-lot rows). */
+    async findLotBidLinkInRow(row, lotId) {
+        const cells = row.locator('td');
+        const count = await cells.count();
+
+        for (let i = 0; i < count; i++) {
+            const text = (await cells.nth(i).innerText()).trim();
+            if (text !== lotId) {
+                continue;
+            }
+
+            for (let j = i + 1; j < Math.min(i + 24, count); j++) {
+                const cell = cells.nth(j);
+                const cellText = (await cell.innerText()).trim();
+                if (!/^\s*Bid\s*$/i.test(cellText)) {
+                    continue;
+                }
+
+                const link = cell.locator('a').filter({ hasText: /^\s*Bid\s*$/i }).first();
+                if (await link.count() > 0) {
+                    return link;
+                }
+            }
+
+            throw new Error(`Bid link not found in cell block for lot ${lotId}`);
+        }
+
+        throw new Error(`Lot cell ${lotId} not found in console row`);
+    }
+
+    /** Click row "Bid" link and wait for Ivalua manual bidding modal (#newOffer). */
+    async openConsoleLotBidModal(row, lotId) {
+        const bidLink = await this.findLotBidLinkInRow(row, lotId);
+        if (await bidLink.count() === 0) {
+            throw new Error(`Bid link not found in row for lot ${lotId}`);
+        }
+
+        await bidLink.scrollIntoViewIfNeeded();
+        await bidLink.click({ timeout: 10000 });
+        await this.page.waitForTimeout(1500);
+
+        const modal = this.page.locator('#body_x_biddingdiv, #newOffer').first();
+        await modal.waitFor({ state: 'visible', timeout: 15000 });
+
+        const newOffer = this.page.locator('#newOffer');
+        await newOffer.waitFor({ state: 'visible', timeout: 10000 });
+
+        const preset = await newOffer.inputValue().catch(() => '');
+        this.logBid('bid_modal_open', { lotId, preset });
+
+        return newOffer;
+    }
+
+    /** Fill #newOffer and submit via #btnBid in the manual bidding modal. */
+    async submitConsoleLotBidModal(page, amount, password, lotId) {
+        const newOffer = page.locator('#newOffer');
+        await newOffer.waitFor({ state: 'visible', timeout: 10000 });
+
+        await newOffer.click({ timeout: 5000 }).catch(() => {});
+
+        await newOffer.evaluate((el, val) => {
+            el.removeAttribute('readonly');
+            el.readOnly = false;
+            el.value = String(val);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+        }, amount);
+
+        const filledRaw = await newOffer.inputValue().catch(() => '');
+        const filledNum = parseFloat(String(filledRaw).replace(/,/g, ''));
+        if (!filledNum || filledNum < amount - 0.01) {
+            await newOffer.evaluate((el, val) => {
+                el.removeAttribute('readonly');
+                el.readOnly = false;
+                const formatted = Number(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                el.value = formatted;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }, amount);
+        }
+
+        this.logBid('newOffer_filled', { amount, value: await newOffer.inputValue().catch(() => '') });
+
+        const btnBid = page.locator('input#btnBid, button#btnBid').first();
+        await btnBid.waitFor({ state: 'visible', timeout: 10000 });
+        await btnBid.click({ timeout: 10000 });
+        await page.waitForTimeout(1500);
+
+        await this.completeBidConfirmation(page, password);
+
+        const closeBtn = page.locator('#body_x_biddingdiv_ico');
+        if (await closeBtn.isVisible().catch(() => false)) {
+            await closeBtn.click({ timeout: 3000 }).catch(() => {});
+            await page.waitForTimeout(500);
+        }
+
+        this.logBid('bid_modal_submitted', { lotId });
+    }
+
+    /** Place bid on auction_console via row Bid modal (Ivalua v5 manual bidding). */
+    async placeBidOnConsoleLot(url, amount, lotId, password) {
+        await this.gotoAuthenticated(url, { settleMs: 3000 });
+
+        const row = await this.findConsoleLotRow(lotId);
+        await row.scrollIntoViewIfNeeded();
+        await this.page.waitForTimeout(500);
+        this.logBid('row_found', { lotId });
+
+        await this.openConsoleLotBidModal(row, lotId);
+        await this.submitConsoleLotBidModal(this.page, amount, password, lotId);
+
+        await this.page.waitForTimeout(3000);
+
+        const pageError = this.page.locator('.error, .alert-danger, [class*="error"], [class*="Error"], #noBid').first();
+        if (await pageError.count() > 0 && await pageError.isVisible()) {
+            const errText = (await pageError.innerText()).trim();
+            if (errText && !/can't bid/i.test(errText)) {
+                throw new Error(`Ivalua rejected bid: ${errText.substring(0, 200)}`);
+            }
+        }
+
+        const updatedState = await this.readConsoleLotState(lotId);
+        this.logBid('verify', { expected: amount, saw: updatedState.current_bid });
+
+        if (updatedState.current_bid < amount - 0.01) {
+            this.logBid('verify_failed', { expected: amount, saw: updatedState.current_bid });
+            throw new Error(
+                `Bid may not have registered on Ivalua. Expected >= ${amount}, saw ${updatedState.current_bid}. Log: ${JSON.stringify(this.bidLog.slice(-10))}`
+            );
+        }
+
+        this.logBid('success', { current_bid: updatedState.current_bid });
+        return {
+            success: true,
+            current_bid: updatedState.current_bid,
+            lot_id: lotId,
+            message: 'Bid confirmed on Ivalua lot.',
+            bid_log: this.bidLog,
+        };
+    }
+
+    async fillPasswordField(page, password) {
+        if (!password) {
+            return;
+        }
+
+        const passSelectors = [
+            '#password',
+            '#passwordParticipate',
+            'input[name="password"][type="password"]',
+            'input[name="passwordParticipate"][type="password"]',
+            'input[id*="password" i][type="password"]',
+            'input[id*="Password" i][type="password"]',
+        ];
+
+        for (const sel of passSelectors) {
+            const passField = page.locator(sel).first();
+            if (await passField.count() === 0) {
+                continue;
+            }
+            try {
+                await passField.waitFor({ state: 'visible', timeout: 5000 });
+                await passField.fill(password);
+                return;
+            } catch (_) {
+                await passField.fill(password, { force: true }).catch(() => {});
+                return;
+            }
+        }
+    }
+
+    /** Extract internal lot key from mass_bid fields only (not generic [123] fields). */
+    async extractRowLotKey(row) {
+        return await row.evaluate((tr) => {
+            for (const inp of tr.querySelectorAll('input')) {
+                const name = inp.name || '';
+                const id = inp.id || '';
+                const fromName = name.match(/mass_bid(?:_up)?\[(\d+)\]/i);
+                if (fromName) {
+                    return fromName[1];
+                }
+                const fromId = id.match(/mass_bid(?:_up)?_(\d+)/i);
+                if (fromId) {
+                    return fromId[1];
+                }
+            }
+            return null;
+        });
+    }
+
+    /** Find mass_bid input aligned with this lot row (by row index / same row / lot id). */
+    async resolveMassBidInput(row, lotId) {
+        const meta = await row.evaluate((tr, targetLotId) => {
+            const lotPattern = /[A-Z]{3,5}\d{3,}/;
+
+            const inRow = tr.querySelector('input[name^="mass_bid_up"], input[id^="mass_bid_up"], input[name*="mass_bid"]');
+            if (inRow) {
+                return { id: inRow.id, name: inRow.name, strategy: 'in_row' };
+            }
+
+            for (const cell of tr.querySelectorAll('td')) {
+                const cellInput = cell.querySelector('input[name^="mass_bid_up"], input[id^="mass_bid_up"]');
+                if (cellInput) {
+                    return { id: cellInput.id, name: cellInput.name, strategy: 'cell' };
+                }
+            }
+
+            const table = tr.closest('table');
+            if (!table) {
+                return null;
+            }
+
+            const lotRows = [...table.querySelectorAll('tr')].filter(
+                (r) => lotPattern.test(r.innerText) && r.innerText.includes(targetLotId)
+            );
+            const targetRow = lotRows[0] || tr;
+            const allLotRows = [...table.querySelectorAll('tr')].filter((r) => lotPattern.test(r.innerText));
+            const rowIdx = allLotRows.indexOf(targetRow);
+
+            const form = tr.closest('form') || document;
+            const massInputs = [...form.querySelectorAll('input[name^="mass_bid_up"], input[id^="mass_bid_up"]')];
+
+            if (rowIdx >= 0 && massInputs[rowIdx]) {
+                const inp = massInputs[rowIdx];
+                return { id: inp.id, name: inp.name, strategy: 'index', rowIdx, totalMass: massInputs.length };
+            }
+
+            return null;
+        }, lotId);
+
+        if (!meta) {
+            return null;
+        }
+
+        this.logBid('mass_input_resolve', { ...meta, lotId });
+
+        if (meta.id) {
+            const escapedId = meta.id.replace(/([!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, '\\$1');
+            return this.page.locator(`#${escapedId}`).first();
+        }
+        if (meta.name) {
+            return this.page.locator(`input[name="${meta.name}"]`).first();
+        }
+
+        return null;
+    }
+
+    /** Select lot checkbox so mass bid submit includes this row only. */
+    async selectLotForMassBid(row) {
+        const checkbox = row.locator('input[type="checkbox"]').first();
+        if (await checkbox.count() === 0) {
+            return false;
+        }
+        try {
+            const checked = await checkbox.isChecked().catch(() => false);
+            if (!checked) {
+                await checkbox.check({ force: true });
+            }
+            this.logBid('mass_row_checked', { checked: true });
+            return true;
+        } catch (err) {
+            this.logBid('mass_row_check_fail', { error: err.message });
+            return false;
+        }
+    }
+
+    /** Clear other mass bid fields so submit only applies to target lot. */
+    async clearOtherMassBidInputs(targetInput) {
+        const targetMeta = await targetInput.evaluate((el) => ({ id: el.id, name: el.name }));
+        await this.page.evaluate(({ id, name }) => {
+            document.querySelectorAll('input[name^="mass_bid_up"], input[id^="mass_bid_up"]').forEach((inp) => {
+                if (inp.id !== id && inp.name !== name) {
+                    inp.value = '';
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }, targetMeta);
+        this.logBid('mass_other_cleared', targetMeta);
+    }
+
+    async waitForPasswordDialog(page, timeoutMs = 8000) {
+        const pass = page.locator(
+            '#password, input[name="password"][type="password"], input[id*="password" i][type="password"]'
+        ).first();
+        try {
+            await pass.waitFor({ state: 'visible', timeout: timeoutMs });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /** Password + confirm after bid submit click (Ivalua shows dialog after submit). */
+    async completeBidConfirmation(page, password) {
+        await page.waitForTimeout(1500);
+
+        const hasPassword = await this.waitForPasswordDialog(page, 8000);
+        if (hasPassword && password) {
+            this.logBid('password_dialog', { visible: true });
+            await this.fillPasswordField(page, password);
+            await page.waitForTimeout(500);
+        } else {
+            this.logBid('password_dialog', { visible: false });
+        }
+
+        const btnBid = page.locator('input#btnBid, button#btnBid').first();
+        if (await btnBid.isVisible().catch(() => false)) {
+            await btnBid.click({ timeout: 5000 }).catch(() => {});
+            await page.waitForTimeout(1500);
+        }
+
+        await this.confirmBidDialogsOnPage(page);
+        await page.waitForTimeout(2000);
+        await this.confirmBidDialogsOnPage(page);
+        await page.waitForTimeout(1500);
+    }
+
+    /** Open lot bid UI: navigate to Bid link URL, popup, or inline form. Returns page to use. */
+    async openLotBidContext(row, lotId) {
+        let bidLink = row.locator('a').filter({ hasText: /^Bid$/i }).first();
+        if (await bidLink.count() === 0) {
+            bidLink = row.locator('a, button').filter({ hasText: /Bid/i }).first();
+        }
+
+        if (await bidLink.count() === 0) {
+            return { page: this.page, mode: 'console' };
+        }
+
+        const href = await bidLink.getAttribute('href');
+
+        if (href && !href.startsWith('javascript') && !href.startsWith('#') && href !== '') {
+            const targetUrl = new URL(href, this.page.url()).href;
+            console.log(`[Ivalua] Navigating to lot bid page: ${targetUrl}`);
+            await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await this.page.waitForTimeout(2500);
+            await this.dismissPassiveNotifications();
+            return { page: this.page, mode: 'detail' };
+        }
+
+        const popupPromise = this.page.context().waitForEvent('page', { timeout: 8000 }).catch(() => null);
+        await bidLink.click({ timeout: 10000 });
+        const popup = await popupPromise;
+
+        if (popup) {
+            await popup.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {});
+            await popup.waitForTimeout(2000);
+            console.log(`[Ivalua] Lot bid opened in popup: ${popup.url()}`);
+            return { page: popup, mode: 'popup' };
+        }
+
+        await this.page.waitForTimeout(3000);
+
+        if (this.page.url().includes('auction_lot') || this.page.url().includes('lot_bid')) {
+            return { page: this.page, mode: 'detail' };
+        }
+
+        return { page: this.page, mode: 'inline' };
+    }
+
+    /** Click Ivalua bid submit — btnBidOuter is a styled span, not a normal button. */
+    async clickIvaluaBidSubmit(page) {
+        const attempts = [
+            { sel: '#btnBidOuter', note: 'green bid wrapper span' },
+            { sel: 'span#btnBidOuter.btn_color_green', note: 'bid outer span' },
+            { sel: '#btnBidOuter .btn', note: 'inner btn label' },
+            { sel: 'input#btnBid', note: 'hidden submit input' },
+            { sel: 'button#btnBid', note: 'bid button element' },
+            { sel: 'input[value*="Bid" i][type="submit"]', note: 'submit input' },
+            { sel: 'button:has-text("Place Bid")', note: 'Place Bid text button' },
+            { sel: 'span.btn_color_green:has-text("Bid")', note: 'green Bid span' },
+        ];
+
+        const failures = [];
+
+        for (const { sel, note } of attempts) {
+            const btn = page.locator(sel).first();
+            if (await btn.count() === 0) {
+                this.logBid('submit_skip', { selector: sel, reason: 'not_found' });
+                continue;
+            }
+
+            try {
+                const visible = await btn.isVisible().catch(() => false);
+                this.logBid('submit_try', { selector: sel, note, visible });
+
+                if (visible) {
+                    await btn.scrollIntoViewIfNeeded().catch(() => {});
+                    await btn.click({ timeout: 10000 });
+                } else {
+                    await btn.evaluate((el) => {
+                        el.click();
+                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                    });
+                }
+
+                this.logBid('submit_ok', { selector: sel });
+                return sel;
+            } catch (err) {
+                failures.push({ selector: sel, error: err.message });
+                this.logBid('submit_fail', { selector: sel, error: err.message });
+            }
+        }
+
+        try {
+            const viaJs = await page.evaluate(() => {
+                const outer = document.getElementById('btnBidOuter');
+                if (outer) {
+                    outer.click();
+                    return 'btnBidOuter-js';
+                }
+                const input = document.getElementById('btnBid');
+                if (input) {
+                    input.click();
+                    if (typeof input.form?.requestSubmit === 'function') {
+                        input.form.requestSubmit(input);
+                    }
+                    return 'btnBid-js';
+                }
+                const green = document.querySelector('span.btn_color_green[id*="Bid"], .btn_color_green[id="btnBidOuter"]');
+                if (green) {
+                    green.click();
+                    return 'green-span-js';
+                }
+                return null;
+            });
+
+            if (viaJs) {
+                this.logBid('submit_ok', { method: viaJs });
+                return viaJs;
+            }
+        } catch (err) {
+            failures.push({ selector: 'evaluate', error: err.message });
+            this.logBid('submit_fail', { method: 'evaluate', error: err.message });
+        }
+
+        this.logBid('submit_exhausted', { failures });
+        throw new Error(`Could not click Ivalua bid submit button. Steps: ${JSON.stringify(failures)}`);
+    }
+
+    /** Submit bid on lot detail page (NOT generic console page inputs). */
+    async submitBidOnPage(page, amount, password, options = {}) {
+        const { scopeRow = null, lotId = null } = options;
+        const pageUrl = page.url();
+        this.logBid('submit_page_start', { url: pageUrl, amount, lotId, scoped: !!scopeRow });
+
+        if (pageUrl.includes('auction_console') && !scopeRow) {
+            this.logBid('submit_page_abort', { reason: 'refuse_generic_console_input' });
+            return false;
+        }
+
+        const root = scopeRow || page;
+        const inputSelectors = [
+            'input[name="bid_price"]',
+            'input#txtBidAmount',
+            'input[id*="BidAmount" i]',
+            'input[id*="BidValue" i]',
+            'input[id*="txtBid" i]',
+            'input[name^="mass_bid_up"]',
+            'input[id^="mass_bid_up"]',
+            'input[name*="mass_bid"]',
+            ...this.selectors.bidInput.split(', '),
+        ];
+
+        let filled = false;
+        let usedInputSelector = null;
+        for (const sel of inputSelectors) {
+            const input = root.locator(sel).first();
+            if (await input.count() === 0) {
+                continue;
+            }
+            try {
+                await input.waitFor({ state: 'visible', timeout: 4000 });
+                await input.fill(String(amount));
+                filled = true;
+                usedInputSelector = sel;
+                this.logBid('input_filled', { selector: sel, mode: 'visible' });
+                break;
+            } catch (_) {
+                try {
+                    await input.waitFor({ state: 'attached', timeout: 2000 });
+                    await input.evaluate((el, val) => {
+                        el.value = String(val);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }, String(amount));
+                    filled = true;
+                    usedInputSelector = sel;
+                    this.logBid('input_filled', { selector: sel, mode: 'hidden' });
+                    break;
+                } catch (innerErr) {
+                    this.logBid('input_skip', { selector: sel, error: innerErr.message });
+                }
+            }
+        }
+
+        if (!filled) {
+            this.logBid('submit_page_abort', { reason: 'no_bid_input_found' });
+            return false;
+        }
+
+        await this.clickIvaluaBidSubmit(page);
+        await this.completeBidConfirmation(page, password);
+
+        this.logBid('submit_page_done', { input: usedInputSelector });
+        return true;
+    }
+
+    async confirmBidDialogsOnPage(page) {
+        const confirmSelectors = [
+            '#btnConfirm',
+            'button[name="btnConfirm"]',
+            'input[value="Confirm"]',
+            'button:has-text("Confirm")',
+            'a:has-text("Confirm")',
+        ];
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            let clicked = false;
+            for (const sel of confirmSelectors) {
+                try {
+                    const btn = page.locator(sel).first();
+                    if (await btn.count() > 0 && await btn.isVisible()) {
+                        await btn.click({ timeout: 3000 });
+                        clicked = true;
+                        await page.waitForTimeout(1500);
+                        break;
+                    }
+                } catch (_) {
+                    // optional dialog
+                }
+            }
+            if (!clicked) {
+                break;
+            }
+        }
+    }
+
+    /** Fill bid amount on console table (mass bid input may be outside the row). */
+    async fillConsoleRowBidInput(row, amount, lotId) {
+        const bidInput = await this.resolveMassBidInput(row, lotId);
+        if (!bidInput) {
+            throw new Error(`No mass bid input found for lot ${lotId} on Ivalua console.`);
+        }
+
+        await bidInput.waitFor({ state: 'attached', timeout: 15000 });
+        await this.clearOtherMassBidInputs(bidInput);
+
+        await bidInput.evaluate((el, val) => {
+            el.removeAttribute('readonly');
+            el.removeAttribute('disabled');
+            el.style.display = '';
+            el.style.visibility = 'visible';
+            el.value = String(val);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }, String(amount));
+
+        return bidInput;
+    }
+
+    /** After opening lot bid page/popup, submit and verify. */
+    async tryPlaceBidOnLotDetailPage(page, amount, password, lotId, consoleUrl) {
+        const isConsole = page.url().includes('auction_console');
+        const submitted = await this.submitBidOnPage(page, amount, password, {
+            scopeRow: isConsole ? null : undefined,
+            lotId,
+        });
+
+        if (!submitted) {
+            if (page !== this.page) {
+                await page.close().catch(() => {});
+            }
+            if (this.page.url() !== consoleUrl) {
+                await this.page.goto(consoleUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+                await this.page.waitForTimeout(2000);
+            }
+            return null;
+        }
+
+        if (page !== this.page) {
+            await page.close().catch(() => {});
+            await this.page.goto(consoleUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await this.page.waitForTimeout(3000);
+        }
+
+        const updatedState = await this.readConsoleLotState(lotId);
+
+        if (updatedState.current_bid < amount - 0.01) {
+            this.logBid('detail_unverified', { expected: amount, saw: updatedState.current_bid });
+            return null;
+        }
+
+        return {
+            success: true,
+            current_bid: updatedState.current_bid,
+            lot_id: lotId,
+            message: 'Bid confirmed on Ivalua lot detail page.',
+        };
+    }
+
     async placeBid(url, amount, lotId = null, password = null) {
-        console.log(`[Ivalua] Placing bid of ${amount} on ${url}${lotId ? ` (lot: ${lotId})` : ''}`);
+        this.bidLog = [];
+        this.logBid('start', { url, amount, lotId });
 
         if (this.mockMode) {
             console.log('[Ivalua] Mock Mode - Simulating successful bid placement.');
@@ -740,84 +1489,17 @@ class IvaluaAdapter {
             };
         }
 
-        await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await this.page.waitForTimeout(2500);
-        await this.dismissPassiveNotifications();
-
         if (url.includes('auction_console') && lotId) {
-            const row = await this.findConsoleLotRow(lotId);
-            await row.scrollIntoViewIfNeeded();
-            await this.page.waitForTimeout(500);
-
-            const bidLink = row.getByRole('link', { name: /^Bid$/i }).or(row.locator('a').filter({ hasText: /^Bid$/i }));
-            if (await bidLink.count() > 0) {
-                await bidLink.first().click({ timeout: 10000 });
-            } else {
-                await row.locator('a, button').filter({ hasText: /Bid/i }).first().click({ timeout: 10000 });
-            }
-            await this.page.waitForTimeout(2000);
-
-            const bidInput = this.page.locator(
-                `input[id^="mass_bid_"][id*="${lotId}"], input[name^="mass_bid_up"], input[id*="mass_bid"]`
-            ).first();
-            await bidInput.waitFor({ timeout: 15000 });
-            await bidInput.click();
-            await bidInput.fill('');
-            await bidInput.fill(String(amount));
-
-            if (password) {
-                const passSelectors = [
-                    '#password',
-                    'input[name="password"][type="password"]',
-                    'input[id*="password" i][type="password"]',
-                    'input[id*="Password" i][type="password"]',
-                ];
-                for (const sel of passSelectors) {
-                    const passField = this.page.locator(sel).first();
-                    if (await passField.count() > 0 && await passField.isVisible()) {
-                        await passField.fill(password);
-                        break;
-                    }
-                }
-            }
-
-            const submitBtn = this.page.locator('#btnBid, input#btnBid, button#btnBid, [id*="btnBid"]').first();
-            await submitBtn.waitFor({ state: 'visible', timeout: 10000 });
-            await submitBtn.click({ timeout: 10000 });
-            await this.page.waitForTimeout(2000);
-
-            await this.confirmBidDialogs();
-
-            await this.page.waitForTimeout(2500);
-
-            const pageError = await this.page.locator('.error, .alert-danger, [class*="error"], [class*="Error"]').first();
-            if (await pageError.count() > 0 && await pageError.isVisible()) {
-                const errText = (await pageError.innerText()).trim();
-                if (errText) {
-                    throw new Error(`Ivalua rejected bid: ${errText.substring(0, 200)}`);
-                }
-            }
-
-            const updatedState = await this.readConsoleLotState(lotId);
-
-            if (updatedState.current_bid < amount - 0.01) {
-                throw new Error(
-                    `Bid may not have registered on Ivalua. Expected >= ${amount}, saw ${updatedState.current_bid}`
-                );
-            }
-
-            return {
-                success: true,
-                current_bid: updatedState.current_bid,
-                lot_id: lotId,
-                message: 'Bid confirmed on Ivalua lot.',
-            };
+            return await this.placeBidOnConsoleLot(url, amount, lotId, password);
         }
+
+        await this.gotoAuthenticated(url, { settleMs: 2500 });
+        await this.dismissPassiveNotifications();
 
         try {
             await this.page.fill(this.selectors.bidInput, amount.toString());
-            await this.page.click(this.selectors.placeBidBtn);
-            await this.confirmBidDialogs();
+            await this.clickIvaluaBidSubmit(this.page);
+            await this.completeBidConfirmation(this.page, password);
             await this.page.waitForSelector(this.selectors.bidSuccessIndicator, { timeout: 15000 });
 
             const updatedState = await this.readAuctionState(url);
@@ -826,13 +1508,32 @@ class IvaluaAdapter {
                 success: true,
                 current_bid: updatedState.current_bid,
                 message: 'Bid confirmed.',
+                bid_log: this.bidLog,
             };
         } catch (e) {
-            throw new Error(`Ivalua bid placement failed: ${e.message}`);
+            this.logBid('fatal', { error: e.message });
+            throw new Error(`Ivalua bid placement failed: ${e.message} | bid_log: ${JSON.stringify(this.bidLog.slice(-12))}`);
         }
     }
 
-    /** Find lot row on console — searches paginated lot tables. */
+    /** Find lot row on console — exact lot ID match, searches paginated tables. */
+    async rowMatchesLotId(row, lotId) {
+        return await row.evaluate((tr, id) => {
+            const pattern = /\b[A-Z]{3,5}\d{3,}\b/g;
+            for (const td of tr.querySelectorAll('td')) {
+                const text = td.innerText.trim();
+                if (text === id) {
+                    return true;
+                }
+                const ids = text.match(pattern) || [];
+                if (ids.includes(id)) {
+                    return true;
+                }
+            }
+            return false;
+        }, lotId);
+    }
+
     async findConsoleLotRow(lotId) {
         for (let pageNum = 1; pageNum <= 30; pageNum++) {
             if (pageNum > 1) {
@@ -842,14 +1543,16 @@ class IvaluaAdapter {
                 }
             }
 
-            const row = this.page.locator('tr').filter({ hasText: lotId }).first();
-            if (await row.count() > 0) {
-                try {
-                    await row.waitFor({ state: 'visible', timeout: 8000 });
-                    return row;
-                } catch (_) {
-                    // try next console page
+            const rows = this.page.locator('tr');
+            const count = await rows.count();
+            for (let i = 0; i < count; i++) {
+                const row = rows.nth(i);
+                if (!(await this.rowMatchesLotId(row, lotId))) {
+                    continue;
                 }
+                await row.waitFor({ state: 'visible', timeout: 8000 });
+                this.logBid('row_match', { lotId, pageNum, rowIndex: i });
+                return row;
             }
         }
 

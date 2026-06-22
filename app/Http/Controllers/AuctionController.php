@@ -61,7 +61,16 @@ class AuctionController extends Controller
             },
         ])->findOrFail($id);
 
-        return view('auctions.show', compact('lot'));
+        $consoleId = null;
+        if (preg_match('/auction_console\/(\d+)/i', $lot->auction->external_url ?? '', $m)) {
+            $consoleId = $m[1];
+        }
+
+        $consoleLots = AuctionLot::where('auction_id', $lot->auction_id)
+            ->orderBy('external_lot_id')
+            ->get(['id', 'external_lot_id', 'title', 'description', 'quantity', 'cosmetic_grade', 'current_bid', 'is_active', 'status']);
+
+        return view('auctions.show', compact('lot', 'consoleId', 'consoleLots'));
     }
 
     public function placeBid(Request $request, $id)
@@ -77,8 +86,10 @@ class AuctionController extends Controller
 
         $request->validate([
             'amount' => 'required|numeric|min:' . $minBid,
+            'external_lot_id' => 'required|string|in:' . $lot->external_lot_id,
         ], [
-            'amount.min' => 'Your bid must be at least ' . number_format($minBid, 2) . ' (Current bid + bid increment).',
+            'amount.min' => 'Your bid must be at least $' . number_format($minBid, 2) . ' (current bid + increment). Price is refreshed every ~10s from Ivalua; the job re-checks live price before placing.',
+            'external_lot_id.in' => 'Lot ID mismatch — please refresh this page and bid again.',
         ]);
 
         $hasPending = Bid::where('auction_lot_id', $lot->id)
@@ -98,9 +109,14 @@ class AuctionController extends Controller
             'status' => 'pending',
         ]);
 
-        PlaceBidJob::dispatch($bid->id);
+        PlaceBidJob::dispatch($bid->id)->onQueue('bids');
 
-        return back()->with('success', 'Your bid is queued — it will be placed automatically on Ivalua within a few seconds.');
+        $consoleHint = '';
+        if (preg_match('/auction_console\/(\d+)/i', $auction->external_url ?? '', $m)) {
+            $consoleHint = " on Ivalua console {$m[1]}";
+        }
+
+        return back()->with('success', "Your bid on lot {$lot->external_lot_id}{$consoleHint} is queued — it will be placed within a few seconds.");
     }
 
     public function setProxyBid(Request $request, $id)

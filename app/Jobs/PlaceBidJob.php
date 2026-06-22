@@ -56,13 +56,10 @@ class PlaceBidJob implements ShouldQueue
             return;
         }
 
-        Log::info("PlaceBidJob: bid #{$bid->id} amount {$bid->amount} on lot {$lot->external_lot_id} → Ivalua");
-
         $lockKey = "lot_lock_{$lot->id}";
         $lock = Cache::lock($lockKey, 120);
 
         if (!$lock->get()) {
-            Log::warning("Could not acquire lock for lot {$lot->id}. Requeuing bid job {$bid->id}");
             $this->release(5);
             return;
         }
@@ -70,7 +67,6 @@ class PlaceBidJob implements ShouldQueue
         $bid->update(['status' => 'processing']);
 
         try {
-            // 1. Sync live state from Ivalua before bidding
             $syncData = $automationService->runCommand('sync', $auction->platform, [
                 'url' => $auction->external_url,
                 'lot_id' => $lot->external_lot_id,
@@ -85,6 +81,10 @@ class PlaceBidJob implements ShouldQueue
             $lot->update([
                 'current_bid' => $currentBid,
                 'bid_increment' => $increment,
+                'title' => $syncData['title'] ?? $lot->title,
+                'description' => $syncData['description'] ?? $lot->description,
+                'quantity' => $syncData['quantity'] ?? $lot->quantity,
+                'cosmetic_grade' => $syncData['cosmetic_grade'] ?? $lot->cosmetic_grade,
                 'time_remaining' => $syncData['time_remaining'] ?? $lot->time_remaining,
                 'ends_at' => !empty($syncData['ends_at']) ? \Carbon\Carbon::parse($syncData['ends_at']) : $lot->ends_at,
                 'last_synced_at' => now(),
@@ -110,7 +110,6 @@ class PlaceBidJob implements ShouldQueue
                 return;
             }
 
-            // 2. Place bid on Ivalua via master account (Playwright)
             $result = $automationService->runCommand('place-bid', $auction->platform, [
                 'url' => $auction->external_url,
                 'amount' => $bid->amount,
@@ -143,8 +142,6 @@ class PlaceBidJob implements ShouldQueue
                 'source' => 'user',
                 'status' => 'successful',
             ]);
-
-            Log::info("PlaceBidJob: bid #{$bid->id} placed on Ivalua successfully.");
 
         } catch (\Exception $e) {
             Log::error("PlaceBidJob failed bid #{$bid->id}: " . $e->getMessage());
