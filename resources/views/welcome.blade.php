@@ -320,7 +320,7 @@
                 <!-- Column 1: Logo Section -->
                 <div class="lg:col-span-1">
                     <div class="flex flex-col">
-                        <img src="https://bids.ellectmobility.com/storage/settings/1781094476_logo.png" alt="Logo" class="h-8 w-auto object-contain self-start">
+                        <img src="{{ asset('images/ellect-logo.png') }}" alt="Ellect Mobility" class="h-8 w-auto object-contain self-start">
                     </div>
                 </div>
 

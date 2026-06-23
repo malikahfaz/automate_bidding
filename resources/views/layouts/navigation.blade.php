@@ -4,7 +4,7 @@
             
             <!-- Logo -->
             <a href="{{ url('/') }}" class="flex items-center gap-2 group">
-                <img src="https://bids.ellectmobility.com/storage/settings/1781094476_logo.png" alt="Logo" class="h-8 w-auto object-contain group-hover:scale-110 transition-transform">
+                <img src="{{ asset('images/ellect-logo.png') }}" alt="Ellect Mobility" class="h-8 w-auto object-contain group-hover:scale-110 transition-transform">
             </a>
 
             <!-- Center Nav (Desktop Only) -->
