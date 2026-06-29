@@ -1,0 +1,28 @@
+{
+    "apps": [
+      {
+        "name": "automation-stack",
+        "script": "php",
+        "args": "artisan automation:stack",
+        "cwd": "/www/wwwroot/auction.ellectmobility.com",
+        "autorestart": true,
+        "watch": false
+      },
+      {
+        "name": "queue-default",
+        "script": "php",
+        "args": "artisan queue:work",
+        "cwd": "/www/wwwroot/auction.ellectmobility.com",
+        "autorestart": true,
+        "watch": false
+      },
+      {
+        "name": "queue-bids",
+        "script": "php",
+        "args": "artisan queue:work --queue=bids",
+        "cwd": "/www/wwwroot/auction.ellectmobility.com",
+        "autorestart": true,
+        "watch": false
+      }
+    ]
+  }
