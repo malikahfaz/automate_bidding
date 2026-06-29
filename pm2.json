@@ -1,6 +1,15 @@
 {
     "apps": [
       {
+        "name": "automation-stack",
+        "script": "php",
+        "args": "artisan automation:stack",
+        "cwd": "/var/www/auction.ellectmobility.com",
+        "autorestart": true,
+        "watch": false,
+        "restart_delay": 5000
+      },
+      {
         "name": "queue-default",
         "script": "php",
         "args": "artisan queue:work",
