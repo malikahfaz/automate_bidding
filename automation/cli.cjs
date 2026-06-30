@@ -55,9 +55,21 @@ async function main() {
         fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
 
         // Launch playwright browser
+        // browser = await chromium.launch({
+        //     headless: true,
+        //     args: ['--no-sandbox', '--disable-setuid-sandbox']
+        // });
+
         browser = await chromium.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--no-zygote',
+                '--disable-features=site-per-process',
+            ]
         });
 
         // Create browser context
